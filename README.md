@@ -1,5 +1,7 @@
 # CiteName
 
+Automatically rename academic downloads by author, year, and title.
+
 把學術 PDF 拖進視窗後，程式會先讀取 PDF metadata 裡的標題；metadata 不可靠時，便依首頁字級與文字位置推測論文標題。畫面會列出原檔名及預計的新檔名，使用者仍可手動修改標題，再按下「重新命名」。
 
 勾選「檔名格式：作者 (年份) - 標題」後，程式也會推測作者與出版年份，並顯示可編輯欄位。缺少明確出版年份時，程式會以 PDF 建立年份作為暫定值，重新命名前應先核對。
