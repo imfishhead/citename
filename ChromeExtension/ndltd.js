@@ -20,7 +20,7 @@ function normalizeNDLTDMetadata(raw) {
     .trim()
     .slice(0, maximum);
   const metadata = {
-    author: clean(raw.author, 120),
+    author: preferredNDLTDName(clean(raw.author, 120)),
     title: clean(raw.title, 350),
     year: clean(raw.year, 4),
     sessionKey: clean(raw.sessionKey, 100),
@@ -29,6 +29,12 @@ function normalizeNDLTDMetadata(raw) {
   if (!metadata.author || !metadata.title) return null;
   if (metadata.year && !/^(?:19|20)\d{2}$/.test(metadata.year)) metadata.year = "";
   return metadata;
+}
+
+function preferredNDLTDName(rawName) {
+  const name = String(rawName || "").replace(/\s+/g, " ").trim();
+  const chineseName = name.match(/[\u3400-\u9fff]{2,6}/u);
+  return chineseName ? chineseName[0] : name;
 }
 
 function sanitizeDownloadBaseName(raw) {
@@ -59,6 +65,7 @@ if (typeof module !== "undefined") {
   module.exports = {
     isNDLTDURL,
     extractNDLTDSessionKey,
+    preferredNDLTDName,
     normalizeNDLTDMetadata,
     sanitizeDownloadBaseName,
     ndltdFilename,

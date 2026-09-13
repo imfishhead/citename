@@ -1,6 +1,6 @@
 import Foundation
 
-struct PDFRenameItem: Identifiable {
+struct CiteNameItem: Identifiable {
     enum State: Equatable {
         case ready
         case renamed

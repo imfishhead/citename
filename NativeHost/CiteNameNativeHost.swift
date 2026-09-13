@@ -110,14 +110,14 @@ private func suggestFilename(_ request: NativeRequest) throws -> NativeResponse 
 
     var urlRequest = URLRequest(url: sourceURL)
     urlRequest.timeoutInterval = 18
-    urlRequest.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X) AppleWebKit/537.36 Chrome PaperRenamer/1.1", forHTTPHeaderField: "User-Agent")
+    urlRequest.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X) AppleWebKit/537.36 Chrome CiteName/1.4", forHTTPHeaderField: "User-Agent")
     urlRequest.setValue("application/pdf,*/*;q=0.8", forHTTPHeaderField: "Accept")
     let data = try download(urlRequest)
     guard data.count <= 100 * 1024 * 1024 else { throw HostError.fileTooLarge }
     guard data.starts(with: Data("%PDF-".utf8)) else { throw HostError.invalidPDF }
 
     let temporaryURL = FileManager.default.temporaryDirectory
-        .appendingPathComponent("PaperRenamer-\(UUID().uuidString)")
+        .appendingPathComponent("CiteName-\(UUID().uuidString)")
         .appendingPathExtension("pdf")
     defer { try? FileManager.default.removeItem(at: temporaryURL) }
     try data.write(to: temporaryURL, options: .atomic)
@@ -137,7 +137,7 @@ private func suggestFilename(_ request: NativeRequest) throws -> NativeResponse 
 private func fetchPMCMetadata(_ url: URL) throws -> PMCArticleMetadata {
     var request = URLRequest(url: url)
     request.timeoutInterval = 8
-    request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X) AppleWebKit/537.36 Chrome PaperRenamer/1.1", forHTTPHeaderField: "User-Agent")
+    request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X) AppleWebKit/537.36 Chrome CiteName/1.4", forHTTPHeaderField: "User-Agent")
     request.setValue("text/html,application/xhtml+xml;q=0.9,*/*;q=0.8", forHTTPHeaderField: "Accept")
     let data = try download(request)
     guard let html = String(data: data, encoding: .utf8),

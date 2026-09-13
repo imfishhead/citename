@@ -1,5 +1,5 @@
 {
-  "name": "local.paper_renamer.host",
+  "name": "local.citename.host",
   "description": "CiteName native host",
   "path": "__HOST_PATH__",
   "type": "stdio",

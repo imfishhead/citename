@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct PaperRenamerApp: App {
+struct CiteNameApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()

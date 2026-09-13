@@ -1,6 +1,6 @@
-importScripts("ndltd.js");
+importScripts("ndltd.js", "tpl.js");
 
-const NATIVE_HOST = "local.paper_renamer.host";
+const NATIVE_HOST = "local.citename.host";
 const DEFAULT_SETTINGS = {
   enabled: true,
   citationFormat: true,
@@ -12,13 +12,24 @@ chrome.runtime.onInstalled.addListener(async () => {
 });
 
 chrome.runtime.onMessage.addListener((message, sender) => {
-  if (message?.type !== "ndltd-thesis-metadata" || !isNDLTDURL(sender.url)) return;
-  const metadata = normalizeNDLTDMetadata(message.metadata);
-  if (!metadata) return;
+  if (message?.type === "ndltd-thesis-metadata" && isNDLTDURL(sender.url)) {
+    const metadata = normalizeNDLTDMetadata(message.metadata);
+    if (!metadata) return;
 
-  const values = { ndltdActiveMetadata: metadata };
-  if (metadata.sessionKey) values[`ndltdMetadata-${metadata.sessionKey}`] = metadata;
-  chrome.storage.session.set(values);
+    const values = { ndltdActiveMetadata: metadata };
+    if (metadata.sessionKey) values[`ndltdMetadata-${metadata.sessionKey}`] = metadata;
+    chrome.storage.session.set(values);
+    return;
+  }
+
+  if (message?.type === "tpl-journal-metadata" && isTPLURL(sender.url)) {
+    const metadata = normalizeTPLMetadata(message.metadata);
+    if (!metadata) return;
+
+    const values = { tplActiveMetadata: metadata };
+    if (metadata.sysId) values[`tplMetadata-${metadata.sysId}`] = metadata;
+    chrome.storage.session.set(values);
+  }
 });
 
 chrome.downloads.onDeterminingFilename.addListener((download, suggest) => {
@@ -44,6 +55,17 @@ async function determineFilename(download, suggest) {
     }
     if (ndltdExtension === "zip") {
       suggest();
+      return;
+    }
+  }
+
+  const tplExtension = tplDownloadExtension(download);
+  if (tplExtension) {
+    const metadata = await metadataForTPLDownload(download);
+    const filename = tplFilename(metadata, settings.citationFormat);
+    if (filename) {
+      await chrome.storage.session.set({ [`preNamed-${download.id}`]: true });
+      suggest({ filename, conflictAction: "uniquify" });
       return;
     }
   }
@@ -82,7 +104,8 @@ chrome.downloads.onChanged.addListener(async (delta) => {
   if (!download || download.state !== "complete") return;
 
   const ndltdExtension = ndltdDownloadExtension(download);
-  if (!isPDFDownload(download) && !ndltdExtension) return;
+  const tplExtension = tplDownloadExtension(download);
+  if (!isPDFDownload(download) && !ndltdExtension && !tplExtension) return;
 
   const preNamedKey = `preNamed-${download.id}`;
   const preNamed = await chrome.storage.session.get(preNamedKey);
@@ -130,6 +153,35 @@ function isPDFDownload(download) {
   } catch {
     return false;
   }
+}
+
+function tplDownloadExtension(download) {
+  const candidates = [download.finalUrl, download.url, download.referrer].filter(Boolean);
+  if (!candidates.some(isTPLURL)) return null;
+  const filename = String(download.filename || "").toLowerCase();
+  const mime = String(download.mime || "").toLowerCase();
+  if (filename.endsWith(".pdf") || mime === "application/pdf") return "pdf";
+  return candidates.some((rawURL) => {
+    try {
+      return new URL(rawURL).pathname.toLowerCase().includes("pdfdownload");
+    } catch {
+      return false;
+    }
+  }) ? "pdf" : null;
+}
+
+async function metadataForTPLDownload(download) {
+  const candidates = [download.referrer, download.finalUrl, download.url].filter(Boolean);
+  const sysId = candidates.map(extractTPLSysId).find(Boolean);
+  const keys = ["tplActiveMetadata"];
+  if (sysId) keys.unshift(`tplMetadata-${sysId}`);
+  const stored = await chrome.storage.session.get(keys);
+  const metadata = normalizeTPLMetadata(
+    sysId ? stored[`tplMetadata-${sysId}`] : stored.tplActiveMetadata
+  ) || normalizeTPLMetadata(stored.tplActiveMetadata);
+  if (!metadata || Date.now() - metadata.savedAt > 2 * 60 * 60 * 1000) return null;
+  if (sysId && metadata.sysId && sysId !== metadata.sysId) return null;
+  return metadata;
 }
 
 function ndltdDownloadExtension(download) {

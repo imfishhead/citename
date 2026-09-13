@@ -7,9 +7,9 @@
     <key>CFBundleDisplayName</key>
     <string>CiteName 0.3</string>
     <key>CFBundleExecutable</key>
-    <string>PaperRenamer</string>
+    <string>citename</string>
     <key>CFBundleIdentifier</key>
-    <string>local.paper-renamer.v3</string>
+    <string>local.citename</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>

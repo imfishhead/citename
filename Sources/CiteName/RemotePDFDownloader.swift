@@ -99,7 +99,7 @@ enum RemotePDFDownloader {
     private static func request(_ url: URL, session: URLSession) async throws -> (data: Data, response: URLResponse) {
         var request = URLRequest(url: url)
         request.timeoutInterval = 30
-        request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X) PaperRenamer/0.3", forHTTPHeaderField: "User-Agent")
+        request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X) CiteName/0.3", forHTTPHeaderField: "User-Agent")
         request.setValue("application/pdf,text/html;q=0.9,*/*;q=0.8", forHTTPHeaderField: "Accept")
 
         let (data, response) = try await session.data(for: request)

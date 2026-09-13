@@ -4,18 +4,18 @@ set -euo pipefail
 script_dir="${0:A:h}"
 user_name="$(id -un)"
 user_home="$(dscl . -read "/Users/$user_name" NFSHomeDirectory | awk '{print $2}')"
-support_dir="$user_home/Library/Application Support/Paper Renamer Chrome"
+support_dir="$user_home/Library/Application Support/CiteName"
 chrome_manifest_dir="$user_home/Library/Application Support/Google/Chrome/NativeMessagingHosts"
 arc_manifest_dir="$user_home/Library/Application Support/Arc/User Data/NativeMessagingHosts"
-host_path="$support_dir/PaperRenamerNativeHost"
+host_path="$support_dir/CiteNameNativeHost"
 
 mkdir -p "$support_dir" "$chrome_manifest_dir" "$arc_manifest_dir"
-cp "$script_dir/NativeHost/PaperRenamerNativeHost" "$host_path"
+cp -X "$script_dir/NativeHost/CiteNameNativeHost" "$host_path"
 chmod +x "$host_path"
 for manifest_dir in "$chrome_manifest_dir" "$arc_manifest_dir"; do
   sed "s|__HOST_PATH__|$host_path|g" \
-    "$script_dir/NativeHost/local.paper_renamer.host.json.template" \
-    > "$manifest_dir/local.paper_renamer.host.json"
+    "$script_dir/NativeHost/local.citename.host.json.template" \
+    > "$manifest_dir/local.citename.host.json"
 done
 
 if [[ -d "/Applications/Arc.app" ]]; then

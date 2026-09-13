@@ -15,11 +15,11 @@ swiftpm_options=(
 
 swift build -c debug "${swiftpm_options[@]}"
 binary_dir="$(swift build -c debug --show-bin-path "${swiftpm_options[@]}")"
-app_dir="$project_dir/dist/Paper Renamer 0.3.app"
+app_dir="$project_dir/dist/CiteName 0.3.app"
 
 mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources"
-cp "$binary_dir/PaperRenamer" "$app_dir/Contents/MacOS/PaperRenamer"
-cp "$project_dir/Supporting/Info.plist" "$app_dir/Contents/Info.plist"
+cp -X "$binary_dir/citename" "$app_dir/Contents/MacOS/citename"
+cp -X "$project_dir/Supporting/Info.plist" "$app_dir/Contents/Info.plist"
 xattr -cr "$app_dir"
 codesign --force --deep --sign - "$app_dir"
 

@@ -3,7 +3,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct ContentView: View {
-    @State private var items: [PDFRenameItem] = []
+    @State private var items: [CiteNameItem] = []
     @State private var isDropTargeted = false
     @State private var isImporterPresented = false
     @State private var alertMessage: String?
@@ -205,7 +205,7 @@ struct ContentView: View {
     }
 
     @ViewBuilder
-    private func stateLabel(_ state: PDFRenameItem.State) -> some View {
+    private func stateLabel(_ state: CiteNameItem.State) -> some View {
         switch state {
         case .ready:
             Text(state.label).foregroundStyle(.secondary)
@@ -250,7 +250,7 @@ struct ContentView: View {
             let title = PDFTitleExtractor.extract(from: url) ?? url.deletingPathExtension().lastPathComponent
             let details = PDFBibliographicExtractor.extract(from: url, title: title)
             if accessed { url.stopAccessingSecurityScopedResource() }
-            items.append(PDFRenameItem(
+            items.append(CiteNameItem(
                 originalURL: url,
                 title: title,
                 author: details.author,
@@ -315,7 +315,7 @@ struct ContentView: View {
         }
     }
 
-    private func isReadyToRename(_ item: PDFRenameItem) -> Bool {
+    private func isReadyToRename(_ item: CiteNameItem) -> Bool {
         guard item.state == .ready, !item.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return false
         }

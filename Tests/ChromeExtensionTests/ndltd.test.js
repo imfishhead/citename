@@ -1,6 +1,7 @@
 const assert = require("node:assert/strict");
 const {
   extractNDLTDSessionKey,
+  preferredNDLTDName,
   normalizeNDLTDMetadata,
   ndltdFilename,
   ndltdZipFilename,
@@ -11,6 +12,7 @@ assert.equal(
   "6lu5rQ"
 );
 assert.equal(extractNDLTDSessionKey("https://example.com/ccd=6lu5rQ/file.zip"), null);
+assert.equal(preferredNDLTDName("Yen-Jung 陳彥蓉-Chen"), "陳彥蓉");
 
 const metadata = normalizeNDLTDMetadata({
   author: " 吳承穎 ",

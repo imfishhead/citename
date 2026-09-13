@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import PaperRenamer
+@testable import CiteName
 
 @Test func removesForbiddenFilenameCharacters() {
     #expect(FilenameSanitizer.sanitize("A/B: C") == "A-B- C")

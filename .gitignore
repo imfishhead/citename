@@ -1,3 +1,4 @@
 .build/
+.swift-test-build/
 dist/
 .DS_Store

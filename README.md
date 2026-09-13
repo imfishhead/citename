@@ -10,18 +10,34 @@ Automatically rename academic downloads by author, year, and title.
 
 所有分析都在本機完成，程式不會上傳 PDF。
 
+## 測試
+
+執行完整 E2E 測試，包括瀏覽器下載流程、兩個國圖網站、fallback、通知、原生通訊與實際 PDF 重新命名：
+
+```bash
+Scripts/test_e2e.sh
+```
+
+若安裝包已經建置完成，可略過重新建置：
+
+```bash
+Scripts/test_e2e.sh --skip-build
+```
+
 ## Chrome／Arc 擴充功能
 
 Chrome 或 Arc 下載 PDF 時，會先嘗試分析論文資料，讓「另存新檔」視窗直接顯示推測後的檔名。需要登入或無法預先讀取時，會在下載完成後套用相同的命名規則。製作安裝包：
 
 在臺灣博碩士論文知識加值系統瀏覽論文詳目後下載電子全文 ZIP，擴充功能會使用同一工作階段內的研究生、出版年與論文名稱命名。若書目資料未成功取得，會保留網站提供的原始 ZIP 檔名。
 
+在國家圖書館「期刊文獻網」的期刊詳目頁下載 PDF 時，擴充功能會讀取作者、出版年與中文篇名來命名；即使全文是沒有文字層的掃描 PDF，也不必依賴檔案內建 metadata。
+
 ```sh
 chmod +x Scripts/build_chrome_extension.sh
 Scripts/build_chrome_extension.sh
 ```
 
-完成後開啟 `dist/Paper Renamer Chrome`，連按兩下 `Install Paper Renamer.command`，再依資料夾內的安裝說明將 Extension 載入 Chrome。
+完成後開啟 `dist/CiteName Chrome`，連按兩下 `Install CiteName.command`，再依資料夾內的安裝說明將 Extension 載入 Chrome。
 
 擴充功能預設採用「作者 (年份) - 標題」格式。若作者或年份無法可靠辨識，會只使用標題，避免產生空白作者或年份的檔名。
 
@@ -30,7 +46,7 @@ Scripts/build_chrome_extension.sh
 需要 macOS 13 或更新版本，以及 Swift 6：
 
 ```sh
-swift run PaperRenamer
+swift run citename
 ```
 
 ## 製作 App
@@ -40,7 +56,7 @@ chmod +x Scripts/build_app.sh
 Scripts/build_app.sh
 ```
 
-完成後可在 `dist/Paper Renamer 0.3.app` 找到程式。這份本機版本使用 ad-hoc 簽章；若要公開發佈，仍需 Apple Developer 憑證、公證及正式的 app sandbox 權限設定。
+完成後可在 `dist/CiteName 0.3.app` 找到程式。這份本機版本使用 ad-hoc 簽章；若要公開發佈，仍需 Apple Developer 憑證、公證及正式的 app sandbox 權限設定。
 
 ## 目前限制
 
