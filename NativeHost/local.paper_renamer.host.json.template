@@ -1,0 +1,9 @@
+{
+  "name": "local.paper_renamer.host",
+  "description": "CiteName native host",
+  "path": "__HOST_PATH__",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://lkepgfhefjolkpdlgemcnikdbhlhaoei/"
+  ]
+}

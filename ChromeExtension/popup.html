@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>CiteName</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main>
+      <h1>CiteName</h1>
+      <label class="setting primary">
+        <span>
+          <strong>自動重新命名論文檔案</strong>
+          <small>支援 PDF 與碩博士論文網 ZIP</small>
+        </span>
+        <input id="enabled" type="checkbox">
+      </label>
+      <label class="setting">
+        <span>
+          <strong>作者 (年份) - 標題</strong>
+          <small>資料不足時只使用標題</small>
+        </span>
+        <input id="citationFormat" type="checkbox">
+      </label>
+      <p id="status" aria-live="polite">設定會自動儲存。</p>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>
