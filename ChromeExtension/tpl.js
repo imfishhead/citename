@@ -50,13 +50,28 @@ function normalizeTPLMetadata(raw) {
   return metadata;
 }
 
-function tplFilename(metadata, citationFormat) {
+function normalizeCitationFilenameFormat(format) {
+  if (format === true) return "author-year-title";
+  if (format === false) return "title";
+  return ["author-year-title", "author-title", "year-title", "title"].includes(format)
+    ? format
+    : "author-year-title";
+}
+
+function citationFilenameParts(metadata, format) {
+  if (format === "author-year-title" && metadata.author && metadata.year) {
+    return `${metadata.author} (${metadata.year}) - ${metadata.title}`;
+  }
+  if (format === "author-title" && metadata.author) return `${metadata.author} - ${metadata.title}`;
+  if (format === "year-title" && metadata.year) return `(${metadata.year}) - ${metadata.title}`;
+  return metadata.title;
+}
+
+function tplFilename(metadata, format) {
   const normalized = normalizeTPLMetadata(metadata);
   if (!normalized) return null;
-  const prefix = citationFormat && normalized.year
-    ? `${normalized.author} (${normalized.year})`
-    : normalized.author;
-  return `${sanitizeDownloadBaseName(`${prefix} - ${normalized.title}`)}.pdf`;
+  const filename = citationFilenameParts(normalized, normalizeCitationFilenameFormat(format));
+  return `${sanitizeDownloadBaseName(filename)}.pdf`;
 }
 
 if (typeof module !== "undefined") {

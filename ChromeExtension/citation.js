@@ -3,6 +3,8 @@
 
   const REJECTED_TITLES = [
     "untitled", "microsoft word", "acrobat distiller", "doi:", "http://", "https://",
+    "original work is properly cited", "creative commons attribution", "this work is licensed",
+    "all rights reserved",
   ];
   const REJECTED_AUTHORS = [
     "pc", "user", "admin", "administrator", "author", "unknown",
@@ -60,6 +62,7 @@
     if (title.length < 8 || title.length > 350) return false;
     if (!/\p{L}/u.test(title)) return false;
     if (/^[A-Za-z]:[\\/]/u.test(title) || (/\\/u.test(title) && /\.(?:ps|eps)\.pdf$/iu.test(title))) return false;
+    if (/\.(?:indd|ai|psd|docx?|pptx?|xlsx?|tex|ps|eps)(?:\.pdf)?$/iu.test(title)) return false;
     if (REJECTED_TITLES.some((term) => lower.includes(term))) return false;
     if (looksLikeExtractionNoise(title)) return false;
     if (sourceFilename && lower === clean(sourceFilename).toLowerCase()) return false;
@@ -155,13 +158,31 @@
     return !NON_ACADEMIC_TERMS.some((term) => lower.includes(term));
   }
 
-  function filename(metadata, citationFormat = true) {
+  function normalizeFilenameFormat(format) {
+    if (format === true) return "author-year-title";
+    if (format === false) return "title";
+    return ["author-year-title", "author-title", "year-title", "title"].includes(format)
+      ? format
+      : "author-year-title";
+  }
+
+  function filename(metadata, format = "author-year-title") {
     const title = preferredSingleLanguageTitle(metadata?.title);
     if (!isPlausibleTitle(title)) return "";
     const author = clean(metadata?.author);
     const year = extractYear(metadata?.year);
-    if (citationFormat && author && year && shouldUseCitationFormat(title)) {
+    const filenameFormat = normalizeFilenameFormat(format);
+    if (!shouldUseCitationFormat(title) || filenameFormat === "title") {
+      return `${sanitize(title)}.pdf`;
+    }
+    if (filenameFormat === "author-year-title" && author && year) {
       return `${sanitize(`${author} (${year}) - ${title}`)}.pdf`;
+    }
+    if (filenameFormat === "author-title" && author) {
+      return `${sanitize(`${author} - ${title}`)}.pdf`;
+    }
+    if (filenameFormat === "year-title" && year) {
+      return `${sanitize(`(${year}) - ${title}`)}.pdf`;
     }
     return `${sanitize(title)}.pdf`;
   }
@@ -170,7 +191,7 @@
     const values = new Map();
     for (const element of document.querySelectorAll("meta[name], meta[property]")) {
       const name = clean(element.getAttribute("name") || element.getAttribute("property")).toLowerCase();
-      const content = clean(element.getAttribute("content"));
+      const content = decodeHTML(element.getAttribute("content"));
       if (!name || !content) continue;
       const list = values.get(name) || [];
       list.push(content);
@@ -238,17 +259,60 @@
 
   function doiFromURL(rawURL) {
     try {
-      const decoded = decodeURIComponent(new URL(rawURL).href);
-      return decoded.match(/10\.\d{4,9}\/[\w.()/:;-]+/iu)?.[0].replace(/[).,;]+$/u, "") || "";
+      // Publisher download URLs commonly append ".pdf" to an otherwise valid
+      // DOI, for example /content/pdf/10.1023/B:....a2.pdf.
+      return doiFromText(decodeURIComponent(new URL(rawURL).href)).replace(/\.pdf$/iu, "");
+    } catch {
+      return "";
+    }
+  }
+
+  function kargerDOIFromURL(rawURL) {
+    try {
+      const url = new URL(rawURL);
+      if (!/(^|\.)karger\.com$/iu.test(url.hostname)) return "";
+      const articleNumber = url.pathname.match(/\/(\d{9})\.pdf$/iu)?.[1];
+      return articleNumber ? `10.1159/${articleNumber}` : "";
+    } catch {
+      return "";
+    }
+  }
+
+  function scienceDirectPIIFromURL(rawURL) {
+    try {
+      const url = new URL(rawURL);
+      if (!/(^|\.)sciencedirect(?:assets)?\.com$/iu.test(url.hostname)) return "";
+      const pii = url.searchParams.get("pii")
+        || `${url.pathname}${url.search}`.match(/\b(S\d{16})\b/iu)?.[1];
+      return /^S\d{16}$/iu.test(pii || "") ? pii.toUpperCase() : "";
+    } catch {
+      return "";
+    }
+  }
+
+  function doiFromText(rawText) {
+    // Some PDFs insert a visual space in a numeric DOI (for example,
+    // "10.1159/0004 84938"). Preserve the following numeric run so the DOI
+    // can still be looked up, without accidentally absorbing prose after it.
+    return String(rawText || "").match(/10\.\d{4,9}\/[\w.()/:;-]+(?:\s+(?=\d)[\w.()/:;-]+)*/iu)?.[0]
+      .replace(/\s+/gu, "")
+      .replace(/[).,;]+$/u, "") || "";
+  }
+
+  function ojsArticleURL(rawURL) {
+    try {
+      const url = new URL(rawURL);
+      const match = url.pathname.match(/^(.*\/article\/view\/)(\d+)/iu);
+      return match ? `${url.origin}${match[1]}${match[2]}` : "";
     } catch {
       return "";
     }
   }
 
   function metadataFromCrossrefWork(work) {
-    const title = clean(work?.title?.[0]);
+    const title = decodeHTML(work?.title?.[0]);
     if (!isPlausibleTitle(title)) return null;
-    const authors = (work?.author || []).map((author) => clean([
+    const authors = (work?.author || []).map((author) => decodeHTML([
       author.given,
       author.family,
     ].filter(Boolean).join(" "))).filter(Boolean);
@@ -279,8 +343,12 @@
     clean,
     extractYear,
     filename,
+    normalizeFilenameFormat,
     dspaceItemURL,
     doiFromURL,
+    kargerDOIFromURL,
+    scienceDirectPIIFromURL,
+    doiFromText,
     formattedAuthors,
     isPlausibleTitle,
     metadataFromDocument,
@@ -289,6 +357,7 @@
     metadataFromHTML,
     metadataFromPMCXML,
     normalizeAuthor,
+    ojsArticleURL,
     preferredSingleLanguageTitle,
     sanitize,
     shouldUseMetadataTitle,

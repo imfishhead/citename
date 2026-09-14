@@ -11,8 +11,9 @@ function escapePDFString(value) {
   return value.replace(/([\\()])/g, "\\$1");
 }
 
-function createPDF({ title, author, year }) {
-  const pageText = `BT /F1 18 Tf 72 720 Td (${escapePDFString(title)}) Tj 0 -30 Td /F1 12 Tf (${escapePDFString(author)}) Tj ET`;
+function createPDF({ title, author, year, academic = true }) {
+  const academicText = academic ? " 0 -30 Td (Abstract) Tj" : "";
+  const pageText = `BT /F1 18 Tf 72 720 Td (${escapePDFString(title)}) Tj 0 -30 Td /F1 12 Tf (${escapePDFString(author)}) Tj${academicText} ET`;
   const objects = [
     "<< /Type /Catalog /Pages 2 0 R >>",
     "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
@@ -72,6 +73,30 @@ test("citation metadata produces a title-only filename when author or year is ab
   );
 });
 
+test("citation metadata supports each selected filename format", () => {
+  const metadata = {
+    author: "Ada Lovelace",
+    year: "2024",
+    title: "Analytical Engines",
+  };
+  assert.equal(globalThis.CiteNameCitation.filename(metadata, "author-year-title"), "Ada Lovelace (2024) - Analytical Engines.pdf");
+  assert.equal(globalThis.CiteNameCitation.filename(metadata, "author-title"), "Ada Lovelace - Analytical Engines.pdf");
+  assert.equal(globalThis.CiteNameCitation.filename(metadata, "year-title"), "(2024) - Analytical Engines.pdf");
+  assert.equal(globalThis.CiteNameCitation.filename(metadata, "title"), "Analytical Engines.pdf");
+});
+
+test("a generic PDF without academic signals uses only its title", async () => {
+  const pdfjsURL = pathToFileURL(path.join(projectRoot, "node_modules/pdfjs-dist/legacy/build/pdf.mjs"));
+  const pdfjsLib = await import(pdfjsURL.href);
+  const metadata = await globalThis.CiteNamePDF.analyzeData(
+    pdfjsLib,
+    createPDF({ title: "Annual Report", author: "Finance Office", year: "2024", academic: false }),
+    { sourceFilename: "report.pdf", verbosity: 0 }
+  );
+  assert.deepEqual(metadata, { title: "Annual Report", author: "", year: "" });
+  assert.equal(globalThis.CiteNameCitation.filename(metadata), "Annual Report.pdf");
+});
+
 test("internal PostScript source paths in PDF metadata fall back to the page title", async () => {
   const fakeDocument = {
     async getMetadata() {
@@ -94,6 +119,31 @@ test("internal PostScript source paths in PDF metadata fall back to the page tit
   const metadata = await globalThis.CiteNamePDF.analyzeDocument(fakeDocument, "s26p9b_3.ps.pdf");
   assert.equal(metadata.title, "Do Messages About Health Risks Threaten the Self? Increasing the Acceptance of Threatening Health Messages Via Self-Affirmation");
   assert.equal(metadata.author, "David A. K. Sherman");
+});
+
+test("layout-program working filenames are rejected as PDF titles", () => {
+  assert.equal(globalThis.CiteNameCitation.isPlausibleTitle("社会心理出片.indd.pdf"), false);
+  assert.equal(globalThis.CiteNameCitation.isPlausibleTitle("manuscript-final.docx"), false);
+});
+
+test("a PDF without a prominent title preserves its original filename", async () => {
+  const document = {
+    async getMetadata() {
+      return { info: { Title: "社会心理出片.indd.pdf" } };
+    },
+    async getPage() {
+      return {
+        async getTextContent() {
+          return { items: [
+            { str: "社会心理学资料", height: 10, transform: [10, 0, 0, 10, 0, 700], hasEOL: true },
+            { str: "第 20 页", height: 10, transform: [10, 0, 0, 10, 0, 680], hasEOL: true },
+            { str: "内部使用", height: 10, transform: [10, 0, 0, 10, 0, 660], hasEOL: true },
+          ] };
+        },
+      };
+    },
+  };
+  assert.equal(await globalThis.CiteNamePDF.analyzeDocument(document, "20090518150216684.pdf"), null);
 });
 
 test("PMC article metadata is converted into a complete citation", () => {
@@ -184,6 +234,24 @@ test("DOI URLs use Crossref metadata before reading the PDF", () => {
     ),
     "10.1111/j.1745-9125.2012.00289.x"
   );
+  assert.equal(
+    globalThis.CiteNameCitation.doiFromURL(
+      "https://link.springer.com/content/pdf/10.1023/B:SERS.0000029102.66384.a2.pdf"
+    ),
+    "10.1023/B:SERS.0000029102.66384.a2"
+  );
+  assert.equal(
+    globalThis.CiteNameCitation.kargerDOIFromURL(
+      "https://karger.com/pho/article-pdf/75/3/219/3432237/000484938.pdf"
+    ),
+    "10.1159/000484938"
+  );
+  assert.equal(
+    globalThis.CiteNameCitation.scienceDirectPIIFromURL(
+      "https://pdf.sciencedirectassets.com/path/main.pdf?pii=S0747563217303527&X-Amz-Signature=example"
+    ),
+    "S0747563217303527"
+  );
   const metadata = globalThis.CiteNameCitation.metadataFromCrossrefWork({
     title: ["Shaping Citizen Perceptions of Police Legitimacy: A Randomized Field Trial of Procedural Justice"],
     author: [
@@ -197,5 +265,49 @@ test("DOI URLs use Crossref metadata before reading the PDF", () => {
   assert.equal(
     globalThis.CiteNameCitation.filename(metadata),
     "Lorraine Mazerolle et al. (2013) - Shaping Citizen Perceptions of Police Legitimacy- A Randomized Field Trial of Procedural Justice.pdf"
+  );
+});
+
+test("a DOI printed in a PDF can be used for formal citation metadata", () => {
+  assert.equal(
+    globalThis.CiteNameCitation.doiFromText("DOI: 10.1177/30504554251328462"),
+    "10.1177/30504554251328462"
+  );
+  assert.equal(
+    globalThis.CiteNameCitation.doiFromText("doi: 10.1159/0004 84938"),
+    "10.1159/000484938"
+  );
+  const metadata = globalThis.CiteNameCitation.metadataFromCrossrefWork({
+    title: ["Small Targets Detection in LIDAR Point Clouds Based on Deep Learning"],
+    author: [
+      { given: "Zhipeng", family: "Zhai" },
+      { given: "Jinju", family: "Shao" },
+      { given: "Meng", family: "Zhang" },
+    ],
+    published: { "date-parts": [[2025, 4, 1]] },
+  });
+  assert.equal(
+    globalThis.CiteNameCitation.filename(metadata),
+    "Zhipeng Zhai et al. (2025) - Small Targets Detection in LIDAR Point Clouds Based on Deep Learning.pdf"
+  );
+});
+
+test("OJS PDF URLs resolve to their article metadata page", () => {
+  assert.equal(
+    globalThis.CiteNameCitation.ojsArticleURL(
+      "https://ojs.aaai.org/aimagazine/index.php/aimagazine/article/view/22004/21782"
+    ),
+    "https://ojs.aaai.org/aimagazine/index.php/aimagazine/article/view/22004"
+  );
+  const metadata = globalThis.CiteNameCitation.metadataFromHTML(`
+    <meta name="citation_title" content="The New Faculty Highlights Program at AAAI-21">
+    <meta name="citation_author" content="Leyton-Brown, Kevin">
+    <meta name="citation_author" content="Mausam">
+    <meta name="citation_author" content="Yang, Qiang">
+    <meta name="citation_publication_date" content="2022-12-22">
+  `);
+  assert.equal(
+    globalThis.CiteNameCitation.filename(metadata),
+    "Kevin Leyton-Brown et al. (2022) - The New Faculty Highlights Program at AAAI-21.pdf"
   );
 });

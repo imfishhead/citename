@@ -55,7 +55,7 @@ function loadScript(context, filename) {
   });
 }
 
-function createBackgroundHarness({ settings, analysisHandler } = {}) {
+function createBackgroundHarness({ settings, analysisHandler, fetchHandler } = {}) {
   const onInstalled = createEvent();
   const onMessage = createEvent();
   const onDeterminingFilename = createEvent();
@@ -112,6 +112,9 @@ function createBackgroundHarness({ settings, analysisHandler } = {}) {
     Promise,
     console,
     chrome,
+    async fetch(url, options) {
+      return fetchHandler ? fetchHandler(url, options) : { ok: false };
+    },
     clearTimeout,
     setTimeout(callback, milliseconds) {
       const timer = setTimeout(callback, Math.min(milliseconds, 25));
@@ -218,7 +221,11 @@ test("manifest points only to files that exist", () => {
 test("installation writes default settings without overwriting saved values", async () => {
   const harness = createBackgroundHarness({ settings: { enabled: false } });
   await harness.onInstalled.emit();
-  assert.deepEqual(harness.local.data, { enabled: false, citationFormat: true });
+  assert.deepEqual(harness.local.data, {
+    enabled: false,
+    citationFormat: true,
+    filenameFormat: "author-year-title",
+  });
 });
 
 test("NDLTD page metadata renames a ZIP and reports completion", async () => {
@@ -300,7 +307,7 @@ test("NDLTD supports PDF downloads and title-only citation settings", async () =
   });
   assert.equal(
     suggestion.filename,
-    "陳彥蓉 - 提問課程設計促進國小中年級學生提問行為之行動研究.pdf"
+    "提問課程設計促進國小中年級學生提問行為之行動研究.pdf"
   );
   assert.equal(harness.analysisCalls.length, 0);
 });
@@ -400,7 +407,6 @@ test("generic citation metadata avoids downloading and parsing the PDF twice", a
       savedAt: Date.now(),
     },
   }, { url: pageURL, tab: { id: 42 } });
-
   const suggestion = await harness.determine({
     id: 14,
     tabId: 42,
@@ -410,6 +416,57 @@ test("generic citation metadata avoids downloading and parsing the PDF twice", a
     mime: "application/pdf",
   });
   assert.equal(suggestion.filename, "Ada Lovelace (2024) - Analytical Engines.pdf");
+  assert.equal(harness.analysisCalls.length, 0);
+});
+
+test("a DOI from the article page takes priority over a Springer book title", async () => {
+  const pageURL = "https://link.springer.com/chapter/10.1007/978-3-319-24589-8_14";
+  let crossrefCalls = 0;
+  const harness = createBackgroundHarness({
+    async fetchHandler(url) {
+      crossrefCalls += 1;
+      assert.match(url, /10.1007%2F978-3-319-24589-8_14/u);
+      return {
+        ok: true,
+        async json() {
+          return { message: {
+            title: ["Evolutionary Changes of Pokemon Game: A Case Study with Focus On Catching Pokemon"],
+            author: [
+              { given: "Chetprayoon", family: "Panumate" },
+              { given: "Shuo", family: "Xiong" },
+              { given: "Hiroyuki", family: "Iida" },
+            ],
+            published: { "date-parts": [[2015]] },
+          } };
+        },
+      };
+    },
+  });
+  await harness.onMessage.emit({
+    type: "citation-page-metadata",
+    metadata: {
+      title: "Entertainment Computing - ICEC 2015",
+      pageURL,
+      doi: "10.1007/978-3-319-24589-8_14",
+      pdfURLs: [],
+      savedAt: Date.now(),
+    },
+  }, { url: pageURL, tab: { id: 42 } });
+  assert.equal(harness.session.data["citationMetadata-42"].doi, "10.1007/978-3-319-24589-8_14");
+
+  const suggestion = await harness.determine({
+    id: 42,
+    filename: "Entertainment Computing - ICEC 2015.pdf",
+    finalUrl: "https://link.springer.com/content/pdf/chapter.pdf",
+    referrer: pageURL,
+    mime: "application/pdf",
+    tabId: 42,
+  });
+  assert.equal(crossrefCalls, 1);
+  assert.deepEqual({ ...suggestion }, {
+    filename: "Chetprayoon Panumate et al. (2015) - Evolutionary Changes of Pokemon Game- A Case Study with Focus On Catching Pokemon.pdf",
+    conflictAction: "uniquify",
+  });
   assert.equal(harness.analysisCalls.length, 0);
 });
 

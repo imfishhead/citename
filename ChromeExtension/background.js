@@ -3,13 +3,19 @@ importScripts("ndltd.js", "tpl.js", "citation.js");
 const DEFAULT_SETTINGS = {
   enabled: true,
   citationFormat: true,
+  filenameFormat: null,
 };
 const ANALYSIS_TIMEOUT_MILLISECONDS = 20000;
 let creatingOffscreenDocument;
 
 chrome.runtime.onInstalled.addListener(async () => {
-  const saved = await chrome.storage.local.get(DEFAULT_SETTINGS);
-  await chrome.storage.local.set(saved);
+  const saved = await chrome.storage.local.get({ enabled: true, citationFormat: true });
+  const filenameFormat = CiteNameCitation.normalizeFilenameFormat(saved.filenameFormat ?? saved.citationFormat);
+  await chrome.storage.local.set({
+    enabled: saved.enabled,
+    citationFormat: filenameFormat === "author-year-title",
+    filenameFormat,
+  });
 });
 
 chrome.runtime.onMessage.addListener((message, sender) => {
@@ -47,6 +53,7 @@ chrome.downloads.onDeterminingFilename.addListener((download, suggest) => {
 
 async function determineFilename(download, suggest) {
   const settings = await chrome.storage.local.get(DEFAULT_SETTINGS);
+  const filenameFormat = CiteNameCitation.normalizeFilenameFormat(settings.filenameFormat ?? settings.citationFormat);
   if (!settings.enabled) {
     suggest();
     return;
@@ -55,7 +62,7 @@ async function determineFilename(download, suggest) {
   const ndltdExtension = ndltdDownloadExtension(download);
   if (ndltdExtension) {
     const metadata = await metadataForNDLTDDownload(download);
-    const filename = ndltdFilename(metadata, settings.citationFormat, ndltdExtension);
+    const filename = ndltdFilename(metadata, filenameFormat, ndltdExtension);
     if (filename) {
       await chrome.storage.session.set({ [`preNamed-${download.id}`]: true });
       suggest({ filename, conflictAction: "uniquify" });
@@ -70,7 +77,7 @@ async function determineFilename(download, suggest) {
   const tplExtension = tplDownloadExtension(download);
   if (tplExtension) {
     const metadata = await metadataForTPLDownload(download);
-    const filename = tplFilename(metadata, settings.citationFormat);
+    const filename = tplFilename(metadata, filenameFormat);
     if (filename) {
       await chrome.storage.session.set({ [`preNamed-${download.id}`]: true });
       suggest({ filename, conflictAction: "uniquify" });
@@ -83,16 +90,32 @@ async function determineFilename(download, suggest) {
     return;
   }
 
+  const ojsMetadata = await metadataForOJSDownload(download);
+  const ojsFilename = CiteNameCitation.filename(ojsMetadata, filenameFormat);
+  if (ojsFilename) {
+    await markPreNamed(download.id);
+    suggest({ filename: ojsFilename, conflictAction: "uniquify" });
+    return;
+  }
+
   const doiMetadata = await metadataForDOIDownload(download);
-  const doiFilename = CiteNameCitation.filename(doiMetadata, settings.citationFormat);
+  const doiFilename = CiteNameCitation.filename(doiMetadata, filenameFormat);
   if (doiFilename) {
     await markPreNamed(download.id);
     suggest({ filename: doiFilename, conflictAction: "uniquify" });
     return;
   }
 
+  const scienceDirectMetadata = await metadataForScienceDirectDownload(download);
+  const scienceDirectFilename = CiteNameCitation.filename(scienceDirectMetadata, filenameFormat);
+  if (scienceDirectFilename) {
+    await markPreNamed(download.id);
+    suggest({ filename: scienceDirectFilename, conflictAction: "uniquify" });
+    return;
+  }
+
   const dspaceMetadata = await metadataForDSpaceDownload(download);
-  const dspaceFilename = CiteNameCitation.filename(dspaceMetadata, settings.citationFormat);
+  const dspaceFilename = CiteNameCitation.filename(dspaceMetadata, filenameFormat);
   if (dspaceFilename) {
     await markPreNamed(download.id);
     suggest({ filename: dspaceFilename, conflictAction: "uniquify" });
@@ -100,7 +123,7 @@ async function determineFilename(download, suggest) {
   }
 
   const pmcMetadata = await metadataForPMCDownload(download);
-  const pmcFilename = CiteNameCitation.filename(pmcMetadata, settings.citationFormat);
+  const pmcFilename = CiteNameCitation.filename(pmcMetadata, filenameFormat);
   if (pmcFilename) {
     await markPreNamed(download.id);
     suggest({ filename: pmcFilename, conflictAction: "uniquify" });
@@ -108,7 +131,8 @@ async function determineFilename(download, suggest) {
   }
 
   const pageMetadata = await metadataForCitationDownload(download);
-  const pageFilename = CiteNameCitation.filename(pageMetadata, settings.citationFormat);
+  const pageDOIMetadata = await metadataForDOI(pageMetadata?.doi);
+  const pageFilename = CiteNameCitation.filename(pageDOIMetadata || pageMetadata, filenameFormat);
   if (pageFilename) {
     await markPreNamed(download.id);
     suggest({ filename: pageFilename, conflictAction: "uniquify" });
@@ -122,8 +146,11 @@ async function determineFilename(download, suggest) {
       sourceFilename: download.filename?.split("/").pop() || "",
     });
 
+    const pdfDOIMetadata = response?.ok
+      ? await metadataForDOI(response.metadata?.doi)
+      : null;
     const filename = response?.ok
-      ? CiteNameCitation.filename(response.metadata, settings.citationFormat)
+      ? CiteNameCitation.filename(pdfDOIMetadata || response.metadata, filenameFormat)
       : "";
     if (!filename) {
       await markAnalysisFailed(download.id, response?.error);
@@ -139,9 +166,28 @@ async function determineFilename(download, suggest) {
   }
 }
 
+async function metadataForOJSDownload(download) {
+  const articleURL = [download.referrer, download.finalUrl, download.url]
+    .map(CiteNameCitation.ojsArticleURL).find(Boolean);
+  if (!articleURL) return null;
+  try {
+    const response = await fetch(articleURL, {
+      headers: { Accept: "text/html,application/xhtml+xml" },
+    });
+    return response.ok ? CiteNameCitation.metadataFromHTML(await response.text()) : null;
+  } catch {
+    return null;
+  }
+}
+
 async function metadataForDOIDownload(download) {
   const doi = [download.finalUrl, download.url, download.referrer]
-    .map(CiteNameCitation.doiFromURL).find(Boolean);
+    .map((url) => CiteNameCitation.doiFromURL(url) || CiteNameCitation.kargerDOIFromURL(url))
+    .find(Boolean);
+  return metadataForDOI(doi);
+}
+
+async function metadataForDOI(doi) {
   if (!doi) return null;
   try {
     const response = await fetch(`https://api.crossref.org/works/${encodeURIComponent(doi)}`, {
@@ -150,6 +196,24 @@ async function metadataForDOIDownload(download) {
     if (!response.ok) return null;
     const body = await response.json();
     return CiteNameCitation.metadataFromCrossrefWork(body?.message);
+  } catch {
+    return null;
+  }
+}
+
+async function metadataForScienceDirectDownload(download) {
+  const pii = [download.finalUrl, download.url, download.referrer]
+    .map(CiteNameCitation.scienceDirectPIIFromURL).find(Boolean);
+  if (!pii) return null;
+  try {
+    const response = await fetch(`https://api.crossref.org/works?query=${encodeURIComponent(pii)}&rows=5`, {
+      headers: { Accept: "application/json" },
+    });
+    if (!response.ok) return null;
+    const works = (await response.json())?.message?.items || [];
+    const work = works.find((candidate) => (candidate?.["alternative-id"] || [])
+      .some((id) => String(id).toUpperCase() === pii));
+    return CiteNameCitation.metadataFromCrossrefWork(work);
   } catch {
     return null;
   }
@@ -253,6 +317,7 @@ function normalizeCitationMetadata(raw) {
     title: CiteNameCitation.preferredSingleLanguageTitle(raw.title),
     author: CiteNameCitation.clean(raw.author),
     year: CiteNameCitation.extractYear(raw.year),
+    doi: CiteNameCitation.doiFromText(raw.doi),
     pageURL: String(raw.pageURL || ""),
     pdfURLs: Array.isArray(raw.pdfURLs) ? raw.pdfURLs.map(String) : [],
     savedAt: Number(raw.savedAt) || Date.now(),

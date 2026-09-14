@@ -34,6 +34,6 @@ assert.equal(
   tplFilename(metadata, true),
   "許瑛玿 (1999) - 網路科技支援之電腦教學軟體對學生學習科學概念的影響.pdf"
 );
-assert.equal(tplFilename(metadata, false), "許瑛玿 - 網路科技支援之電腦教學軟體對學生學習科學概念的影響.pdf");
+assert.equal(tplFilename(metadata, false), "網路科技支援之電腦教學軟體對學生學習科學概念的影響.pdf");
 
 console.log("TPL journal filename tests passed");

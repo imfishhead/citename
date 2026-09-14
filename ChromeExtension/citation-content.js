@@ -16,6 +16,7 @@
     metadata: {
       ...metadata,
       pageURL: location.href,
+      doi: globalThis.CiteNameCitation.doiFromURL(location.href),
       savedAt: Date.now(),
     },
   });

@@ -94,6 +94,10 @@
     );
     if (eligible.length === 0) return "";
     const largest = Math.max(...eligible.map((line) => line.fontSize), 0);
+    const allSizes = lines.map((line) => line.fontSize).filter((size) => size > 0).sort((left, right) => left - right);
+    const typicalSize = allSizes[Math.floor(allSizes.length * 0.25)] || 0;
+    const titleIsProminent = largest >= 15 || (typicalSize > 0 && largest >= typicalSize * 1.35);
+    if (!titleIsProminent) return "";
     const first = eligible.find((line) => largest === 0 || line.fontSize >= largest - 0.6);
     if (!first) return "";
 
@@ -167,6 +171,25 @@
     return String(creationDate || "").match(/(?:19|20)\d{2}/u)?.[0] || "";
   }
 
+  function hasAcademicSignals(firstPageText) {
+    const text = Citation.clean(firstPageText).toLowerCase();
+    const signals = [
+      /\babstract\b/u,
+      /\bkeywords?\b/u,
+      /\bdoi\s*:/u,
+      /\breceived\s*:/u,
+      /\baccepted\s*:/u,
+      /\bjournal\b/u,
+      /\bvolume\s+\d+/u,
+      /\bmanuscript\b/u,
+      /摘要/u,
+      /關鍵詞|关键词/u,
+      /參考文獻|参考文献/u,
+      /學報|学报|期刊|論文|论文/u,
+    ];
+    return signals.some((pattern) => pattern.test(text));
+  }
+
   async function analyzeDocument(document, sourceFilename = "") {
     const metadata = await document.getMetadata().catch(() => ({ info: {} }));
     const info = metadata?.info || {};
@@ -175,22 +198,24 @@
     const lines = textLines(content.items || []);
     const pageText = plainText(content.items || []);
     const sourceBase = String(sourceFilename).replace(/\.pdf$/iu, "");
+    const academic = hasAcademicSignals(pageText);
 
     let title = "";
     if (Citation.shouldUseMetadataTitle(info.Title, sourceBase)) {
       title = Citation.preferredSingleLanguageTitle(info.Title);
     } else {
-      title = Citation.preferredSingleLanguageTitle(
-        titleFromTypography(lines) || titleFromPlainText(pageText)
-      );
+      title = Citation.preferredSingleLanguageTitle(titleFromTypography(lines));
     }
     if (!title) return null;
 
-    return {
+    const result = {
       title,
-      author: Citation.formattedAuthors(info.Author) || authorsFromFirstPage(lines, title),
-      year: publicationYear(pageText, info.CreationDate),
+      author: academic ? Citation.formattedAuthors(info.Author) || authorsFromFirstPage(lines, title) : "",
+      year: academic ? publicationYear(pageText, info.CreationDate) : "",
     };
+    const doi = Citation.doiFromText(pageText);
+    if (doi) result.doi = doi;
+    return result;
   }
 
   async function analyzeData(pdfjsLib, data, options = {}) {
@@ -216,6 +241,7 @@
     analyzeData,
     analyzeDocument,
     authorsFromFirstPage,
+    hasAcademicSignals,
     publicationYear,
     textLines,
     titleFromPlainText,

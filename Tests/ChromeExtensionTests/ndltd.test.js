@@ -27,7 +27,7 @@ assert.equal(
 );
 assert.equal(
   ndltdZipFilename(metadata, false),
-  "吳承穎 - 高中生自主學習表現之多元樣貌.zip"
+  "高中生自主學習表現之多元樣貌.zip"
 );
 assert.equal(
   ndltdFilename({

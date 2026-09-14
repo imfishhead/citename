@@ -8,21 +8,48 @@
   </head>
   <body>
     <main>
-      <h1>CiteName</h1>
-      <label class="setting primary">
-        <span>
-          <strong>自動重新命名論文檔案</strong>
-          <small>PDF 只在瀏覽器內分析，不會上傳</small>
-        </span>
-        <input id="enabled" type="checkbox">
-      </label>
-      <label class="setting">
-        <span>
-          <strong>作者 (年份) - 標題</strong>
-          <small>資料不足時只使用標題</small>
-        </span>
-        <input id="citationFormat" type="checkbox">
-      </label>
+      <header class="app-header">
+        <img src="icons/citename-48.png" alt="" class="app-icon">
+        <div>
+          <h1>CiteName</h1>
+          <p>讓學術下載檔名更好找</p>
+        </div>
+      </header>
+
+      <section class="privacy-note" aria-label="隱私權說明">
+        <span class="check" aria-hidden="true">✓</span>
+        <span>PDF 只在瀏覽器內分析</span>
+      </section>
+
+      <section class="settings" aria-label="設定">
+        <label class="setting primary">
+          <span>
+            <strong>自動重新命名</strong>
+            <small>下載時依文章資料建立新檔名</small>
+          </span>
+          <input id="enabled" type="checkbox" aria-label="自動重新命名">
+        </label>
+        <label class="setting format-setting" for="filenameFormat">
+          <span>
+            <strong>檔名格式</strong>
+            <small id="formatHint">作者 (年份) - 標題</small>
+          </span>
+          <select id="filenameFormat" aria-label="檔名格式">
+            <option value="author-year-title">作者 (年份) - 標題</option>
+            <option value="author-title">作者 - 標題</option>
+            <option value="year-title">(年份) - 標題</option>
+            <option value="title">只用標題</option>
+          </select>
+        </label>
+      </section>
+
+      <section class="preview" aria-label="檔名範例">
+        <span class="preview-label">檔名會變成</span>
+        <div class="filename original">main.pdf</div>
+        <span class="arrow" aria-hidden="true">↓</span>
+        <div id="filenamePreview" class="filename renamed">作者 (年份) - 標題.pdf</div>
+      </section>
+
       <p id="status" aria-live="polite">設定會自動儲存。</p>
     </main>
     <script src="popup.js"></script>

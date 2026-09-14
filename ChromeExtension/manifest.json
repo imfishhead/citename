@@ -1,10 +1,9 @@
 {
   "manifest_version": 3,
   "name": "CiteName",
-  "version": "2.0.3",
+  "version": "2.0.14",
   "minimum_chrome_version": "116",
   "description": "下載學術 PDF、碩博士論文網 ZIP 或國圖期刊全文後，自動依作者、年份與標題重新命名。",
-  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA20EMa9+Z6OU3SOimrZqYhPuxJwicFXKRt7FNq3DIStcxPYSmzr4mf9LuRyvhluJj5Sgq/BhZGA1tqH+AMwyyPXOEWbU95C1b3JbNmVUkqgq3wZDJc9gbno+y3qRCbsICOyVNInplKFlT/YZAvblNbRWzX0HkUhDSJgNVrEsI6fnUB1R7kg0tbJ6Xaj13iKCoDOeZ+5MnE4KPamtqvHfcMPXmQewjxoeuGnPh1F+soZLuYIj4hw2aj7L1hzgwF8VBvJ6Kle5XD0w4JHjBuaELOpEU7QiJElpDF5Lp/ZDBOnAL1TbB09uCV6qSwkHIDyKg6fKc9cXCD6t2t6UxxmIyzQIDAQAB",
   "permissions": [
     "downloads",
     "notifications",
