@@ -50,6 +50,10 @@ Chrome 不允許 `?`、`:`、`/` 等字元出現在下載檔名中；CiteName �
 - 臺灣博碩士論文知識加值系統：從詳目頁下載 ZIP 或 PDF
 - 國家圖書館期刊文獻網：從期刊詳目頁下載 PDF
 
+## 協助支援更多網站
+
+如果遇到尚未正確命名的學術網站，歡迎附上文章頁或下載連結回報 [Issue](https://github.com/imfishhead/citename/issues)，也歡迎送出 PR 協助支援更多網站。
+
 ## 測試
 
 ```sh
