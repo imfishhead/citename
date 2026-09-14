@@ -71,3 +71,7 @@ Scripts/test_e2e.sh --skip-build
 ## 限制
 
 掃描型 PDF 沒有文字層時，無法從 PDF 推測書目資料。雙欄排版、特殊字型與防爬機制也可能讓辨識失敗；此時 CiteName 會保留網站原本提供的檔名。
+
+## 授權
+
+本專案採 [CiteName Proprietary License](LICENSE)。原始碼、圖片與文件保留所有權利，禁止未經書面同意複製、修改、重新發布或轉售；官方版可透過 Chrome 線上應用程式商店供個人或內部使用。
