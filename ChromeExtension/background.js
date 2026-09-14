@@ -1,10 +1,11 @@
-importScripts("ndltd.js", "tpl.js");
+importScripts("ndltd.js", "tpl.js", "citation.js");
 
-const NATIVE_HOST = "local.citename.host";
 const DEFAULT_SETTINGS = {
   enabled: true,
   citationFormat: true,
 };
+const ANALYSIS_TIMEOUT_MILLISECONDS = 20000;
+let creatingOffscreenDocument;
 
 chrome.runtime.onInstalled.addListener(async () => {
   const saved = await chrome.storage.local.get(DEFAULT_SETTINGS);
@@ -12,6 +13,13 @@ chrome.runtime.onInstalled.addListener(async () => {
 });
 
 chrome.runtime.onMessage.addListener((message, sender) => {
+  if (message?.type === "citation-page-metadata" && sender.tab?.id >= 0) {
+    const metadata = normalizeCitationMetadata(message.metadata);
+    if (!metadata) return;
+    chrome.storage.session.set({ [`citationMetadata-${sender.tab.id}`]: metadata });
+    return;
+  }
+
   if (message?.type === "ndltd-thesis-metadata" && isNDLTDURL(sender.url)) {
     const metadata = normalizeNDLTDMetadata(message.metadata);
     if (!metadata) return;
@@ -75,22 +83,122 @@ async function determineFilename(download, suggest) {
     return;
   }
 
-  try {
-    const response = await sendNativeMessageWithTimeout({
-      action: "suggest",
-      url: download.finalUrl || download.url,
-      citationFormat: settings.citationFormat,
-    }, 20000);
+  const doiMetadata = await metadataForDOIDownload(download);
+  const doiFilename = CiteNameCitation.filename(doiMetadata, settings.citationFormat);
+  if (doiFilename) {
+    await markPreNamed(download.id);
+    suggest({ filename: doiFilename, conflictAction: "uniquify" });
+    return;
+  }
 
-    if (!response?.ok || !response.filename) {
+  const dspaceMetadata = await metadataForDSpaceDownload(download);
+  const dspaceFilename = CiteNameCitation.filename(dspaceMetadata, settings.citationFormat);
+  if (dspaceFilename) {
+    await markPreNamed(download.id);
+    suggest({ filename: dspaceFilename, conflictAction: "uniquify" });
+    return;
+  }
+
+  const pmcMetadata = await metadataForPMCDownload(download);
+  const pmcFilename = CiteNameCitation.filename(pmcMetadata, settings.citationFormat);
+  if (pmcFilename) {
+    await markPreNamed(download.id);
+    suggest({ filename: pmcFilename, conflictAction: "uniquify" });
+    return;
+  }
+
+  const pageMetadata = await metadataForCitationDownload(download);
+  const pageFilename = CiteNameCitation.filename(pageMetadata, settings.citationFormat);
+  if (pageFilename) {
+    await markPreNamed(download.id);
+    suggest({ filename: pageFilename, conflictAction: "uniquify" });
+    return;
+  }
+
+  try {
+    const response = await analyzePDFDownloadWithTimeout({
+      type: "analyze-pdf-download",
+      url: download.finalUrl || download.url,
+      sourceFilename: download.filename?.split("/").pop() || "",
+    });
+
+    const filename = response?.ok
+      ? CiteNameCitation.filename(response.metadata, settings.citationFormat)
+      : "";
+    if (!filename) {
+      await markAnalysisFailed(download.id, response?.error);
       suggest();
       return;
     }
 
-    await chrome.storage.session.set({ [`preNamed-${download.id}`]: true });
-    suggest({ filename: response.filename, conflictAction: "uniquify" });
-  } catch {
+    await markPreNamed(download.id);
+    suggest({ filename, conflictAction: "uniquify" });
+  } catch (error) {
+    await markAnalysisFailed(download.id, error?.message);
     suggest();
+  }
+}
+
+async function metadataForDOIDownload(download) {
+  const doi = [download.finalUrl, download.url, download.referrer]
+    .map(CiteNameCitation.doiFromURL).find(Boolean);
+  if (!doi) return null;
+  try {
+    const response = await fetch(`https://api.crossref.org/works/${encodeURIComponent(doi)}`, {
+      headers: { Accept: "application/json" },
+    });
+    if (!response.ok) return null;
+    const body = await response.json();
+    return CiteNameCitation.metadataFromCrossrefWork(body?.message);
+  } catch {
+    return null;
+  }
+}
+
+async function metadataForDSpaceDownload(download) {
+  const itemURL = [download.referrer, download.finalUrl, download.url]
+    .map(CiteNameCitation.dspaceItemURL).find(Boolean);
+  if (!itemURL) return null;
+  try {
+    const response = await fetch(itemURL, { headers: { Accept: "application/json" } });
+    return response.ok ? CiteNameCitation.metadataFromDSpaceItem(await response.json()) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function metadataForPMCDownload(download) {
+  const candidates = [download.finalUrl, download.url, download.referrer].filter(Boolean);
+  const articleURL = candidates.map(CiteNameCitation.articleURLForPMC).find(Boolean);
+  if (!articleURL) return null;
+  const pmcID = articleURL.match(/\/(PMC\d+)\/?$/iu)?.[1]?.toUpperCase();
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    try {
+      const response = await fetch(articleURL, {
+        signal: controller.signal,
+        credentials: "include",
+        headers: { Accept: "text/html,application/xhtml+xml" },
+      });
+      if (response.ok) {
+        const metadata = CiteNameCitation.metadataFromHTML(await response.text());
+        if (metadata) return metadata;
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch {
+    // Europe PMC is used below as a metadata-only fallback.
+  }
+  if (!pmcID) return null;
+  try {
+    const response = await fetch(`https://www.ebi.ac.uk/europepmc/webservices/rest/${pmcID}/fullTextXML`, {
+      headers: { Accept: "application/xml,text/xml" },
+    });
+    return response.ok ? CiteNameCitation.metadataFromPMCXML(await response.text()) : null;
+  } catch {
+    return null;
   }
 }
 
@@ -120,27 +228,106 @@ chrome.downloads.onChanged.addListener(async (delta) => {
 
   if (ndltdExtension === "zip") return;
 
-  chrome.runtime.sendNativeMessage(
-    NATIVE_HOST,
-    {
-      action: "rename",
-      path: download.filename,
-      citationFormat: settings.citationFormat,
-    },
-    (response) => {
-      if (chrome.runtime.lastError) {
-        showNotification("CiteName 尚未連線", "請重新執行安裝程式，再啟動 Chrome。");
-        return;
-      }
-
-      if (response?.ok) {
-        showNotification("PDF 已重新命名", response.filename);
-      } else {
-        showNotification("PDF 未重新命名", response?.error || "找不到可用的 PDF 標題。");
-      }
-    }
-  );
+  const failedKey = `analysisFailed-${download.id}`;
+  const failed = await chrome.storage.session.get(failedKey);
+  if (failed[failedKey]) {
+    await chrome.storage.session.remove(failedKey);
+    showNotification("PDF 維持原檔名", failed[failedKey]);
+  }
 });
+
+async function markPreNamed(downloadId) {
+  await chrome.storage.session.set({ [`preNamed-${downloadId}`]: true });
+  await chrome.storage.session.remove(`analysisFailed-${downloadId}`);
+}
+
+async function markAnalysisFailed(downloadId, reason) {
+  await chrome.storage.session.set({
+    [`analysisFailed-${downloadId}`]: reason || "下載前無法辨識這份 PDF。",
+  });
+}
+
+function normalizeCitationMetadata(raw) {
+  if (!raw || !CiteNameCitation.isPlausibleTitle(raw.title)) return null;
+  return {
+    title: CiteNameCitation.preferredSingleLanguageTitle(raw.title),
+    author: CiteNameCitation.clean(raw.author),
+    year: CiteNameCitation.extractYear(raw.year),
+    pageURL: String(raw.pageURL || ""),
+    pdfURLs: Array.isArray(raw.pdfURLs) ? raw.pdfURLs.map(String) : [],
+    savedAt: Number(raw.savedAt) || Date.now(),
+  };
+}
+
+async function metadataForCitationDownload(download) {
+  if (!(download.tabId >= 0)) return null;
+  const key = `citationMetadata-${download.tabId}`;
+  const stored = await chrome.storage.session.get(key);
+  const metadata = normalizeCitationMetadata(stored[key]);
+  if (!metadata || Date.now() - metadata.savedAt > 2 * 60 * 60 * 1000) return null;
+
+  const downloadURL = normalizedURL(download.finalUrl || download.url);
+  const referrerURL = normalizedURL(download.referrer);
+  const pageURL = normalizedURL(metadata.pageURL);
+  const pdfURLs = metadata.pdfURLs.map(normalizedURL).filter(Boolean);
+  if (referrerURL && pageURL === referrerURL) return metadata;
+  if (downloadURL && pdfURLs.includes(downloadURL)) return metadata;
+  return null;
+}
+
+function normalizedURL(raw) {
+  try {
+    const url = new URL(raw);
+    url.hash = "";
+    return url.href;
+  } catch {
+    return "";
+  }
+}
+
+async function ensureOffscreenDocument() {
+  const offscreenURL = chrome.runtime.getURL("offscreen.html");
+  if (chrome.runtime.getContexts) {
+    const contexts = await chrome.runtime.getContexts({
+      contextTypes: ["OFFSCREEN_DOCUMENT"],
+      documentUrls: [offscreenURL],
+    });
+    if (contexts.length > 0) return;
+  }
+
+  if (creatingOffscreenDocument) {
+    await creatingOffscreenDocument;
+    return;
+  }
+  creatingOffscreenDocument = chrome.offscreen.createDocument({
+    url: "offscreen.html",
+    reasons: ["WORKERS", "DOM_PARSER", "BLOBS"],
+    justification: "在本機讀取學術 PDF 的書目資料，以便在下載前產生檔名。",
+  });
+  try {
+    await creatingOffscreenDocument;
+  } finally {
+    creatingOffscreenDocument = undefined;
+  }
+}
+
+async function analyzePDFDownloadWithTimeout(message) {
+  await ensureOffscreenDocument();
+  let timer;
+  try {
+    return await Promise.race([
+      chrome.runtime.sendMessage(message),
+      new Promise((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error("PDF 分析逾時，已保留原檔名。")),
+          ANALYSIS_TIMEOUT_MILLISECONDS
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 function isPDFDownload(download) {
   const filename = download.filename || "";
@@ -213,23 +400,6 @@ async function metadataForNDLTDDownload(download) {
   if (!metadata || Date.now() - metadata.savedAt > 2 * 60 * 60 * 1000) return null;
   if (sessionKey && metadata.sessionKey && sessionKey !== metadata.sessionKey) return null;
   return metadata;
-}
-
-function sendNativeMessageWithTimeout(message, timeoutMilliseconds) {
-  return Promise.race([
-    new Promise((resolve, reject) => {
-      chrome.runtime.sendNativeMessage(NATIVE_HOST, message, (response) => {
-        if (chrome.runtime.lastError) {
-          reject(new Error(chrome.runtime.lastError.message));
-        } else {
-          resolve(response);
-        }
-      });
-    }),
-    new Promise((_, reject) => {
-      setTimeout(() => reject(new Error("PDF 分析逾時")), timeoutMilliseconds);
-    }),
-  ]);
 }
 
 function showNotification(title, message) {

@@ -170,6 +170,10 @@ enum PDFTitleExtractor {
         let rejected = ["untitled", "microsoft word", "acrobat distiller", "doi:", "http://", "https://"]
 
         guard title.count >= 8, title.count <= 350 else { return false }
+        if title.range(of: #"^[A-Za-z]:[\\/]"#, options: .regularExpression) != nil ||
+            (title.contains("\\") && title.range(of: #"(?i)\.(?:ps|eps)\.pdf$"#, options: .regularExpression) != nil) {
+            return false
+        }
         guard !rejected.contains(where: lower.contains) else { return false }
         guard title.rangeOfCharacter(from: .letters) != nil else { return false }
         guard !looksLikeExtractionNoise(title) else { return false }

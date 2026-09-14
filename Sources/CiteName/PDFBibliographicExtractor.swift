@@ -49,7 +49,7 @@ enum PDFBibliographicExtractor {
         let rejectedMetadataAuthors = [
             "pc", "user", "admin", "administrator", "author", "unknown",
             "microsoft word", "microsoft office", "acrobat", "research trends",
-            "core issues", "learning sciences"
+            "core issues", "learning sciences", "jbranch"
         ]
         guard !cleaned.isEmpty,
               !rejectedMetadataAuthors.contains(where: cleaned.lowercased().contains) else { return nil }
@@ -91,9 +91,11 @@ enum PDFBibliographicExtractor {
             .map(clean)
             .filter { !$0.isEmpty }
 
-        guard let titleIndex = lines.firstIndex(where: {
-            $0.caseInsensitiveCompare(title) == .orderedSame || title.localizedCaseInsensitiveContains($0)
-        }) else { return nil }
+        let titleIndex = lines.enumerated().reduce(-1) { lastIndex, element in
+            let value = element.element.lowercased()
+            return !value.isEmpty && title.lowercased().contains(value) ? element.offset : lastIndex
+        }
+        guard titleIndex >= 0 else { return nil }
 
         var names: [String] = []
         for line in lines.dropFirst(titleIndex + 1).prefix(12) {

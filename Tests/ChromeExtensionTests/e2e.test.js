@@ -55,7 +55,7 @@ function loadScript(context, filename) {
   });
 }
 
-function createBackgroundHarness({ settings, nativeHandler } = {}) {
+function createBackgroundHarness({ settings, analysisHandler } = {}) {
   const onInstalled = createEvent();
   const onMessage = createEvent();
   const onDeterminingFilename = createEvent();
@@ -63,7 +63,8 @@ function createBackgroundHarness({ settings, nativeHandler } = {}) {
   const local = createStorageArea(settings);
   const session = createStorageArea();
   const notifications = [];
-  const nativeCalls = [];
+  const analysisCalls = [];
+  const offscreenCreates = [];
   const downloadsById = new Map();
 
   const chrome = {
@@ -71,19 +72,22 @@ function createBackgroundHarness({ settings, nativeHandler } = {}) {
       lastError: undefined,
       onInstalled,
       onMessage,
-      sendNativeMessage(host, message, callback) {
-        nativeCalls.push({ host, message });
-        const outcome = nativeHandler
-          ? nativeHandler({ host, message, callIndex: nativeCalls.length - 1 })
-          : { ok: false, error: "No native response configured" };
-        if (outcome?.noResponse) return;
-        if (outcome?.lastError) {
-          chrome.runtime.lastError = { message: outcome.lastError };
-          callback(undefined);
-          chrome.runtime.lastError = undefined;
-          return;
-        }
-        callback(outcome);
+      getURL(filename) {
+        return `chrome-extension://test/${filename}`;
+      },
+      async getContexts() {
+        return [{ contextType: "OFFSCREEN_DOCUMENT" }];
+      },
+      async sendMessage(message) {
+        analysisCalls.push(message);
+        return analysisHandler
+          ? analysisHandler({ message, callIndex: analysisCalls.length - 1 })
+          : { ok: false, error: "No PDF analysis configured" };
+      },
+    },
+    offscreen: {
+      async createDocument(options) {
+        offscreenCreates.push(options);
       },
     },
     storage: { local, session },
@@ -129,7 +133,7 @@ function createBackgroundHarness({ settings, nativeHandler } = {}) {
     context,
     downloadsById,
     local,
-    nativeCalls,
+    analysisCalls,
     notifications,
     onChanged,
     onInstalled,
@@ -203,7 +207,9 @@ test("manifest points only to files that exist", () => {
   ];
   assert.equal(manifest.name, "CiteName");
   assert.ok(manifest.permissions.includes("downloads"));
-  assert.ok(manifest.permissions.includes("nativeMessaging"));
+  assert.ok(manifest.permissions.includes("offscreen"));
+  assert.ok(!manifest.permissions.includes("nativeMessaging"));
+  assert.ok(manifest.host_permissions.includes("https://*/*"));
   for (const filename of new Set(referencedFiles)) {
     assert.ok(fs.existsSync(path.join(extensionRoot, filename)), `Missing ${filename}`);
   }
@@ -244,7 +250,7 @@ test("NDLTD page metadata renames a ZIP and reports completion", async () => {
   });
 
   await harness.complete({ ...download, filename: `/Downloads/${suggestion.filename}` });
-  assert.equal(harness.nativeCalls.length, 0);
+  assert.equal(harness.analysisCalls.length, 0);
   assert.equal(harness.notifications.at(-1).title, "論文 ZIP 已重新命名");
   assert.equal(harness.session.data["preNamed-1"], undefined);
 });
@@ -267,7 +273,7 @@ test("NDLTD rejects metadata from another session and preserves the ZIP filename
     mime: "application/zip",
   });
   assert.equal(suggestion, undefined);
-  assert.equal(harness.nativeCalls.length, 0);
+  assert.equal(harness.analysisCalls.length, 0);
 });
 
 test("NDLTD supports PDF downloads and title-only citation settings", async () => {
@@ -296,7 +302,7 @@ test("NDLTD supports PDF downloads and title-only citation settings", async () =
     suggestion.filename,
     "陳彥蓉 - 提問課程設計促進國小中年級學生提問行為之行動研究.pdf"
   );
-  assert.equal(harness.nativeCalls.length, 0);
+  assert.equal(harness.analysisCalls.length, 0);
 });
 
 test("TPL detail metadata renames a scanned journal PDF", async () => {
@@ -327,13 +333,16 @@ test("TPL detail metadata renames a scanned journal PDF", async () => {
     conflictAction: "uniquify",
   });
   await harness.complete({ ...download, filename: `/Downloads/${suggestion.filename}` });
-  assert.equal(harness.nativeCalls.length, 0);
+  assert.equal(harness.analysisCalls.length, 0);
   assert.equal(harness.notifications.at(-1).title, "PDF 已使用論文資料命名");
 });
 
-test("expired TPL metadata falls through to the generic native suggestion", async () => {
+test("expired TPL metadata falls through to the in-extension PDF analyzer", async () => {
   const harness = createBackgroundHarness({
-    nativeHandler: () => ({ ok: true, filename: "Fallback title.pdf" }),
+    analysisHandler: () => ({
+      ok: true,
+      metadata: { title: "Fallback title", author: "", year: "" },
+    }),
   });
   await harness.session.set({
     tplActiveMetadata: {
@@ -351,14 +360,17 @@ test("expired TPL metadata falls through to the generic native suggestion", asyn
     mime: "application/pdf",
   });
   assert.equal(suggestion.filename, "Fallback title.pdf");
-  assert.equal(harness.nativeCalls.length, 1);
+  assert.equal(harness.analysisCalls.length, 1);
 });
 
-test("a generic PDF uses the native suggestion and skips a second rename", async () => {
+test("a generic PDF uses the in-extension PDF analyzer", async () => {
   const harness = createBackgroundHarness({
-    nativeHandler: ({ message }) => {
-      assert.equal(message.action, "suggest");
-      return { ok: true, filename: "Ada Lovelace (2024) - Analytical Engines.pdf" };
+    analysisHandler: ({ message }) => {
+      assert.equal(message.type, "analyze-pdf-download");
+      return {
+        ok: true,
+        metadata: { title: "Analytical Engines", author: "Ada Lovelace", year: "2024" },
+      };
     },
   });
   const download = {
@@ -370,15 +382,40 @@ test("a generic PDF uses the native suggestion and skips a second rename", async
   const suggestion = await harness.determine(download);
   assert.equal(suggestion.filename, "Ada Lovelace (2024) - Analytical Engines.pdf");
   await harness.complete({ ...download, filename: `/Downloads/${suggestion.filename}` });
-  assert.equal(harness.nativeCalls.length, 1);
+  assert.equal(harness.analysisCalls.length, 1);
   assert.equal(harness.notifications.at(-1).title, "PDF 已使用論文資料命名");
 });
 
-test("a failed pre-download suggestion falls back to post-download native rename", async () => {
+test("generic citation metadata avoids downloading and parsing the PDF twice", async () => {
+  const harness = createBackgroundHarness();
+  const pageURL = "https://example.org/articles/analytical-engines";
+  await harness.onMessage.emit({
+    type: "citation-page-metadata",
+    metadata: {
+      title: "Analytical Engines",
+      author: "Ada Lovelace",
+      year: "2024",
+      pageURL,
+      pdfURLs: ["https://example.org/paper.pdf"],
+      savedAt: Date.now(),
+    },
+  }, { url: pageURL, tab: { id: 42 } });
+
+  const suggestion = await harness.determine({
+    id: 14,
+    tabId: 42,
+    filename: "paper.pdf",
+    finalUrl: "https://example.org/paper.pdf",
+    referrer: pageURL,
+    mime: "application/pdf",
+  });
+  assert.equal(suggestion.filename, "Ada Lovelace (2024) - Analytical Engines.pdf");
+  assert.equal(harness.analysisCalls.length, 0);
+});
+
+test("a failed in-extension analysis preserves the original filename", async () => {
   const harness = createBackgroundHarness({
-    nativeHandler: ({ message }) => message.action === "suggest"
-      ? { ok: false, error: "blocked" }
-      : { ok: true, filename: "Grace Hopper (1952) - The Education of a Computer.pdf" },
+    analysisHandler: () => ({ ok: false, error: "網站拒絕讀取 PDF" }),
   });
   const download = {
     id: 5,
@@ -388,48 +425,28 @@ test("a failed pre-download suggestion falls back to post-download native rename
   };
   assert.equal(await harness.determine(download), undefined);
   await harness.complete(download);
-  assert.deepEqual(harness.nativeCalls.map((call) => call.message.action), ["suggest", "rename"]);
-  assert.equal(harness.notifications.at(-1).title, "PDF 已重新命名");
+  assert.equal(harness.analysisCalls.length, 1);
+  assert.equal(harness.notifications.at(-1).title, "PDF 維持原檔名");
+  assert.equal(harness.notifications.at(-1).message, "網站拒絕讀取 PDF");
 });
 
-test("a missing native host produces the connection notification", async () => {
-  const harness = createBackgroundHarness({
-    nativeHandler: () => ({ lastError: "Specified native messaging host not found" }),
-  });
-  await harness.complete({
-    id: 6,
-    filename: "/Downloads/local.pdf",
-    finalUrl: "https://example.org/local.pdf",
-    mime: "application/pdf",
-  });
-  assert.equal(harness.notifications.at(-1).title, "CiteName 尚未連線");
-});
-
-test("native timeout and rename failure both preserve the download", async () => {
+test("PDF analysis timeout preserves the download", async () => {
   const timeoutHarness = createBackgroundHarness({
-    nativeHandler: () => ({ noResponse: true }),
+    analysisHandler: () => new Promise(() => {}),
   });
-  assert.equal(await timeoutHarness.determine({
+  const download = {
     id: 11,
     filename: "timeout.pdf",
     finalUrl: "https://example.org/timeout.pdf",
     mime: "application/pdf",
-  }), undefined);
-
-  const failedRename = createBackgroundHarness({
-    nativeHandler: () => ({ ok: false, error: "找不到可用的 PDF 標題。" }),
-  });
-  await failedRename.complete({
-    id: 12,
-    filename: "/Downloads/unknown.pdf",
-    finalUrl: "https://example.org/unknown.pdf",
-    mime: "application/pdf",
-  });
-  assert.equal(failedRename.notifications.at(-1).title, "PDF 未重新命名");
-  assert.equal(failedRename.notifications.at(-1).message, "找不到可用的 PDF 標題。");
+  };
+  assert.equal(await timeoutHarness.determine(download), undefined);
+  await timeoutHarness.complete({ ...download, filename: "/Downloads/timeout.pdf" });
+  assert.equal(timeoutHarness.notifications.at(-1).title, "PDF 維持原檔名");
+  assert.match(timeoutHarness.notifications.at(-1).message, /分析逾時/);
 });
 
-test("disabled mode and non-PDF downloads do not call the native host", async () => {
+test("disabled mode and non-PDF downloads do not start PDF analysis", async () => {
   const disabled = createBackgroundHarness({ settings: { enabled: false, citationFormat: true } });
   assert.equal(await disabled.determine({
     id: 7,
@@ -443,7 +460,7 @@ test("disabled mode and non-PDF downloads do not call the native host", async ()
     finalUrl: "https://example.org/paper.pdf",
     mime: "application/pdf",
   });
-  assert.equal(disabled.nativeCalls.length, 0);
+  assert.equal(disabled.analysisCalls.length, 0);
 
   const nonPDF = createBackgroundHarness();
   assert.equal(await nonPDF.determine({
@@ -452,12 +469,12 @@ test("disabled mode and non-PDF downloads do not call the native host", async ()
     finalUrl: "https://example.org/notes.txt",
     mime: "text/plain",
   }), undefined);
-  assert.equal(nonPDF.nativeCalls.length, 0);
+  assert.equal(nonPDF.analysisCalls.length, 0);
 });
 
 test("in-progress download changes are ignored", async () => {
   const harness = createBackgroundHarness();
   await harness.onChanged.emit({ id: 13, state: { current: "in_progress" } });
-  assert.equal(harness.nativeCalls.length, 0);
+  assert.equal(harness.analysisCalls.length, 0);
   assert.equal(harness.notifications.length, 0);
 });
