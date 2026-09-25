@@ -62,7 +62,7 @@
     if (title.length < 8 || title.length > 350) return false;
     if (!/\p{L}/u.test(title)) return false;
     if (/^[A-Za-z]:[\\/]/u.test(title) || (/\\/u.test(title) && /\.(?:ps|eps)\.pdf$/iu.test(title))) return false;
-    if (/\.(?:indd|ai|psd|docx?|pptx?|xlsx?|tex|ps|eps)(?:\.pdf)?$/iu.test(title)) return false;
+    if (/\.(?:indd|ai|psd|tpf|docx?|pptx?|xlsx?|tex|ps|eps)(?:\.pdf)?$/iu.test(title)) return false;
     if (REJECTED_TITLES.some((term) => lower.includes(term))) return false;
     if (looksLikeExtractionNoise(title)) return false;
     if (sourceFilename && lower === clean(sourceFilename).toLowerCase()) return false;
@@ -142,6 +142,7 @@
       ...(values.get("citation_pdf_url") || []),
       ...(values.get("citation_fulltext_html_url") || []).filter((url) => /\.pdf(?:$|[?#])/iu.test(url)),
     ];
+    const doi = doiFromText(first("citation_doi", "dc.identifier.doi", "dc.identifier"));
     return {
       title: preferredSingleLanguageTitle(title),
       author: formatAuthorList(authors),
@@ -150,6 +151,7 @@
         "dc.date", "dcterms.issued", "article:published_time",
       )),
       pdfURLs,
+      ...(doi ? { doi } : {}),
     };
   }
 
@@ -178,6 +180,12 @@
     if (filenameFormat === "author-year-title" && author && year) {
       return `${sanitize(`${author} (${year}) - ${title}`)}.pdf`;
     }
+    if (filenameFormat === "author-year-title" && author) {
+      return `${sanitize(`${author} - ${title}`)}.pdf`;
+    }
+    if (filenameFormat === "author-year-title" && year) {
+      return `${sanitize(`(${year}) - ${title}`)}.pdf`;
+    }
     if (filenameFormat === "author-title" && author) {
       return `${sanitize(`${author} - ${title}`)}.pdf`;
     }
@@ -201,6 +209,25 @@
     return metadataFromValues(values);
   }
 
+  function metadataFromAiritiSearchResult(result) {
+    if (!result) return null;
+    const title = clean(result.querySelector?.(".ustyle_heading_H3 a")?.textContent);
+    if (!isPlausibleTitle(title)) return null;
+
+    const authors = Array.from(result.querySelectorAll?.(".點擊作者") || [])
+      .map((element) => normalizeAuthor(element.textContent))
+      .filter(Boolean);
+    const date = result.querySelector?.(".sourcedate")?.textContent
+      || result.querySelector?.(".source")?.textContent
+      || "";
+    return {
+      title: preferredSingleLanguageTitle(title),
+      author: formatAuthorList(authors),
+      year: extractYear(date),
+      pdfURLs: [],
+    };
+  }
+
   function metadataFromHTML(html) {
     const values = new Map();
     for (const tag of String(html || "").match(/<meta\b[^>]*>/giu) || []) {
@@ -222,12 +249,28 @@
     const text = (tag) => decodeHTML(String(xml || "").match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`, "iu"))?.[1] || "");
     const title = text("article-title").replace(/<[^>]+>/gu, "");
     if (!isPlausibleTitle(title)) return null;
-    const authors = [...String(xml || "").matchAll(/<contrib[^>]*contrib-type=["']author["'][^>]*>[\s\S]*?<surname>([^<]+)<\/surname>[\s\S]*?<given-names>([^<]+)<\/given-names>[\s\S]*?<\/contrib>/giu)]
+    const authors = [...String(xml || "").matchAll(/<contrib(?:\s[^>]*)?>[\s\S]*?<surname>([^<]+)<\/surname>[\s\S]*?<given-names[^>]*>([^<]+)<\/given-names>[\s\S]*?<\/contrib>/giu)]
       .map((match) => `${match[2]} ${match[1]}`);
     return {
       title: preferredSingleLanguageTitle(title),
       author: formatAuthorList(authors),
       year: extractYear(text("year")),
+      pdfURLs: [],
+    };
+  }
+
+  function metadataFromEuropePMCRecord(record) {
+    const title = clean(record?.title);
+    if (!isPlausibleTitle(title)) return null;
+
+    const authors = clean(record?.authorString).split(/,\s*/u).filter(Boolean).map((author) => {
+      const match = author.match(/^(.+?)\s+([A-Z](?:\.[A-Z.]*)?)$/u);
+      return match ? `${match[2]} ${match[1]}` : author;
+    });
+    return {
+      title: preferredSingleLanguageTitle(title),
+      author: formatAuthorList(authors),
+      year: extractYear(record?.firstPublicationDate || record?.pubYear),
       pdfURLs: [],
     };
   }
@@ -312,10 +355,11 @@
   function metadataFromCrossrefWork(work) {
     const title = decodeHTML(work?.title?.[0]);
     if (!isPlausibleTitle(title)) return null;
-    const authors = (work?.author || []).map((author) => decodeHTML([
-      author.given,
-      author.family,
-    ].filter(Boolean).join(" "))).filter(Boolean);
+    const authors = (work?.author || []).map((author) => {
+      const given = decodeHTML(author.given);
+      const family = decodeHTML(author.family);
+      return containsCJK(`${given}${family}`) ? `${family}${given}` : clean([given, family].filter(Boolean).join(" "));
+    }).filter(Boolean);
     const dateParts = work?.published?.["date-parts"]
       || work?.["published-print"]?.["date-parts"]
       || work?.["published-online"]?.["date-parts"];
@@ -352,8 +396,10 @@
     formattedAuthors,
     isPlausibleTitle,
     metadataFromDocument,
+    metadataFromAiritiSearchResult,
     metadataFromDSpaceItem,
     metadataFromCrossrefWork,
+    metadataFromEuropePMCRecord,
     metadataFromHTML,
     metadataFromPMCXML,
     normalizeAuthor,

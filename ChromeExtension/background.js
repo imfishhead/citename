@@ -22,7 +22,51 @@ chrome.runtime.onMessage.addListener((message, sender) => {
   if (message?.type === "citation-page-metadata" && sender.tab?.id >= 0) {
     const metadata = normalizeCitationMetadata(message.metadata);
     if (!metadata) return;
-    chrome.storage.session.set({ [`citationMetadata-${sender.tab.id}`]: metadata });
+    const values = { [`citationMetadata-${sender.tab.id}`]: metadata };
+    if (isAiritiArticleURL(metadata.pageURL)) {
+      values.airitiActiveMetadata = metadata;
+      // Keep a short-lived durable fallback. Chrome invalidates existing
+      // content scripts when an unpacked extension reloads, while the open
+      // Airiti page can still create a detached blob download later.
+      chrome.storage.local.set({ airitiActiveMetadata: metadata });
+    }
+    chrome.storage.session.set(values);
+    return;
+  }
+
+  if (message?.type === "airiti-download-intent" && sender.tab?.id >= 0) {
+    const metadata = normalizeCitationMetadata(message.metadata);
+    if (!metadata || !isAiritiURL(metadata.pageURL)) return;
+    if (!isAiritiArticleURL(metadata.pageURL)) {
+      chrome.storage.session.remove("airitiActiveMetadata");
+      chrome.storage.local.remove("airitiActiveMetadata");
+    }
+    chrome.storage.session.set({
+      airitiPendingMetadata: { ...metadata, sourceTabId: sender.tab.id },
+    });
+    return;
+  }
+
+  if (message?.type === "airiti-search-results-metadata" && sender.tab?.id >= 0) {
+    const results = (Array.isArray(message.results) ? message.results : [])
+      .map((result) => normalizeCitationMetadata({
+        ...result,
+        pageURL: message.pageURL,
+        savedAt: message.savedAt,
+      }))
+      .filter(Boolean);
+    if (results.length === 0 || !isAiritiURL(message.pageURL)) return;
+    const snapshot = {
+      results,
+      pageURL: String(message.pageURL || ""),
+      savedAt: Number(message.savedAt) || Date.now(),
+      sourceTabId: sender.tab.id,
+    };
+    chrome.storage.session.set({
+      [`airitiSearchResults-${sender.tab.id}`]: snapshot,
+      airitiSearchResults: snapshot,
+    });
+    chrome.storage.local.set({ airitiSearchResults: snapshot });
     return;
   }
 
@@ -111,6 +155,14 @@ async function determineFilename(download, suggest) {
   if (scienceDirectFilename) {
     await markPreNamed(download.id);
     suggest({ filename: scienceDirectFilename, conflictAction: "uniquify" });
+    return;
+  }
+
+  const airitiMetadata = await metadataForAiritiDownload(download);
+  const airitiFilename = CiteNameCitation.filename(airitiMetadata, filenameFormat);
+  if (airitiFilename) {
+    await markPreNamed(download.id);
+    suggest({ filename: airitiFilename, conflictAction: "uniquify" });
     return;
   }
 
@@ -219,6 +271,73 @@ async function metadataForScienceDirectDownload(download) {
   }
 }
 
+async function metadataForAiritiDownload(download) {
+  const isAiritiDownload = [download.finalUrl, download.url, download.referrer]
+    .some(isAiritiDownloadURL);
+  const pending = await chrome.storage.session.get("airitiPendingMetadata");
+  const pendingMetadata = normalizeCitationMetadata(pending.airitiPendingMetadata);
+  const pendingTabId = Number(pending.airitiPendingMetadata?.sourceTabId);
+  const isFreshIntent = pendingMetadata && Date.now() - pendingMetadata.savedAt <= 30_000;
+  const isSameTab = download.tabId >= 0 && pendingTabId === download.tabId;
+  if (isFreshIntent && (isSameTab || isAiritiDownload)) {
+    // Airiti may emit more than one download event for one confirmed action.
+    // Keep the latest click intent until it expires or the next click replaces
+    // it, so a preliminary event cannot consume the actual PDF's metadata.
+    return pendingMetadata;
+  }
+  if (!isAiritiDownload) return null;
+
+  const searchResultMetadata = await metadataFromAiritiSearchResults(download);
+  if (searchResultMetadata) return searchResultMetadata;
+
+  const [sessionStored, localStored] = await Promise.all([
+    chrome.storage.session.get("airitiActiveMetadata"),
+    chrome.storage.local.get("airitiActiveMetadata"),
+  ]);
+  const metadata = normalizeCitationMetadata(
+    sessionStored.airitiActiveMetadata || localStored.airitiActiveMetadata
+  );
+  return metadata && Date.now() - metadata.savedAt <= 2 * 60 * 60 * 1000 ? metadata : null;
+}
+
+async function metadataFromAiritiSearchResults(download) {
+  const tabKey = download.tabId >= 0 ? `airitiSearchResults-${download.tabId}` : "";
+  const [tabStored, sessionStored, localStored] = await Promise.all([
+    tabKey ? chrome.storage.session.get(tabKey) : Promise.resolve({}),
+    chrome.storage.session.get("airitiSearchResults"),
+    chrome.storage.local.get("airitiSearchResults"),
+  ]);
+  const snapshots = [tabStored[tabKey], sessionStored.airitiSearchResults, localStored.airitiSearchResults]
+    .filter((snapshot) => snapshot && Date.now() - Number(snapshot.savedAt) <= 2 * 60 * 60 * 1000);
+  const originalTitle = titleFromDownloadFilename(download.filename);
+  if (!originalTitle) return null;
+
+  for (const snapshot of snapshots) {
+    const match = (Array.isArray(snapshot.results) ? snapshot.results : [])
+      .map(normalizeCitationMetadata)
+      .find((metadata) => comparableAiritiTitle(metadata?.title) === comparableAiritiTitle(originalTitle));
+    if (match) return match;
+  }
+  return null;
+}
+
+function titleFromDownloadFilename(rawFilename) {
+  let filename = String(rawFilename || "").split(/[\\/]/u).pop() || "";
+  try {
+    filename = decodeURIComponent(filename);
+  } catch {
+    // Keep the browser-provided filename when it is not URL encoded.
+  }
+  return filename.replace(/\.pdf$/iu, "").replace(/ \(\d+\)$/u, "").trim();
+}
+
+function comparableAiritiTitle(value) {
+  return CiteNameCitation.clean(value)
+    .normalize("NFKC")
+    .replace(/[\s：:－—–_-]+/gu, "")
+    .toLowerCase();
+}
+
 async function metadataForDSpaceDownload(download) {
   const itemURL = [download.referrer, download.finalUrl, download.url]
     .map(CiteNameCitation.dspaceItemURL).find(Boolean);
@@ -236,31 +355,28 @@ async function metadataForPMCDownload(download) {
   const articleURL = candidates.map(CiteNameCitation.articleURLForPMC).find(Boolean);
   if (!articleURL) return null;
   const pmcID = articleURL.match(/\/(PMC\d+)\/?$/iu)?.[1]?.toUpperCase();
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 8000);
-    try {
-      const response = await fetch(articleURL, {
-        signal: controller.signal,
-        credentials: "include",
-        headers: { Accept: "text/html,application/xhtml+xml" },
-      });
-      if (response.ok) {
-        const metadata = CiteNameCitation.metadataFromHTML(await response.text());
-        if (metadata) return metadata;
-      }
-    } finally {
-      clearTimeout(timer);
-    }
-  } catch {
-    // Europe PMC is used below as a metadata-only fallback.
-  }
   if (!pmcID) return null;
+
+  // Europe PMC's compact record is more reliable than an HTML fetch while the
+  // download filename callback is waiting.  It also works for direct main.pdf
+  // links, where there is no article tab metadata to reuse.
   try {
-    const response = await fetch(`https://www.ebi.ac.uk/europepmc/webservices/rest/${pmcID}/fullTextXML`, {
-      headers: { Accept: "application/xml,text/xml" },
+    const response = await fetch(`https://www.ebi.ac.uk/europepmc/webservices/rest/search?query=${encodeURIComponent(`PMCID:${pmcID}`)}&format=json`, {
+      headers: { Accept: "application/json" },
     });
-    return response.ok ? CiteNameCitation.metadataFromPMCXML(await response.text()) : null;
+    const record = response.ok ? (await response.json())?.resultList?.result?.[0] : null;
+    const metadata = CiteNameCitation.metadataFromEuropePMCRecord(record);
+    if (metadata) return metadata;
+  } catch {
+    // The official PMC article page remains a useful fallback below.
+  }
+
+  try {
+    const response = await fetch(articleURL, {
+      credentials: "include",
+      headers: { Accept: "text/html,application/xhtml+xml" },
+    });
+    return response.ok ? CiteNameCitation.metadataFromHTML(await response.text()) : null;
   } catch {
     return null;
   }
@@ -337,7 +453,50 @@ async function metadataForCitationDownload(download) {
   const pdfURLs = metadata.pdfURLs.map(normalizedURL).filter(Boolean);
   if (referrerURL && pageURL === referrerURL) return metadata;
   if (downloadURL && pdfURLs.includes(downloadURL)) return metadata;
+  if (isAiritiArticleURL(pageURL)) return metadata;
   return null;
+}
+
+function isAiritiArticleURL(rawURL) {
+  try {
+    const url = new URL(rawURL);
+    return isAiritiHostname(url.hostname) &&
+      /^\/Article\/Detail(?:\/|$)/iu.test(url.pathname);
+  } catch {
+    return false;
+  }
+}
+
+function isAiritiURL(rawURL) {
+  try {
+    return isAiritiHostname(new URL(rawURL).hostname);
+  } catch {
+    return false;
+  }
+}
+
+function isAiritiDownloadURL(rawURL) {
+  try {
+    const url = new URL(rawURL);
+    // Airiti fetches the PDF with XHR, then starts the browser download from
+    // an object URL such as blob:https://www-airitilibrary-com.../<uuid>.
+    // A blob URL itself has no hostname, so recover the embedded origin.
+    const hostname = url.protocol === "blob:"
+      ? new URL(url.pathname).hostname.toLowerCase()
+      : url.hostname.toLowerCase();
+    return isAiritiHostname(hostname)
+      || hostname === "download.nthulib-oc.nthu.edu.tw";
+  } catch {
+    return false;
+  }
+}
+
+function isAiritiHostname(hostname) {
+  const normalized = String(hostname || "").toLowerCase();
+  return /(^|\.)airitilibrary\.com$/u.test(normalized)
+    // University library proxies turn dots in the original hostname into
+    // hyphens, e.g. www-airitilibrary-com.nthulib-oc.nthu.edu.tw.
+    || /(^|\.)www-airitilibrary-com\.[a-z0-9.-]+$/u.test(normalized);
 }
 
 function normalizedURL(raw) {

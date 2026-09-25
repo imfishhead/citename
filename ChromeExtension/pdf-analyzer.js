@@ -179,6 +179,7 @@
       /\bdoi\s*:/u,
       /\breceived\s*:/u,
       /\baccepted\s*:/u,
+      /\bauthors?[’']\s*note\b/iu,
       /\bjournal\b/u,
       /\bvolume\s+\d+/u,
       /\bmanuscript\b/u,

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "CiteName",
-  "version": "2.0.14",
+  "version": "2.0.30",
   "minimum_chrome_version": "116",
   "description": "下載學術 PDF、碩博士論文網 ZIP 或國圖期刊全文後，自動依作者、年份與標題重新命名。",
   "permissions": [

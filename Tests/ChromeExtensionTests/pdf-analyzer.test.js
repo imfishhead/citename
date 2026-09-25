@@ -66,10 +66,18 @@ test("PDF.js extracts a citation filename entirely inside the extension", async 
   );
 });
 
-test("citation metadata produces a title-only filename when author or year is absent", () => {
+test("citation metadata uses the available citation parts when author or year is absent", () => {
   assert.equal(
     globalThis.CiteNameCitation.filename({ title: "A Reliable Paper Title", author: "", year: "" }, true),
     "A Reliable Paper Title.pdf"
+  );
+  assert.equal(
+    globalThis.CiteNameCitation.filename({ title: "A Reliable Paper Title", author: "", year: "2026" }, true),
+    "(2026) - A Reliable Paper Title.pdf"
+  );
+  assert.equal(
+    globalThis.CiteNameCitation.filename({ title: "A Reliable Paper Title", author: "Ada Lovelace", year: "" }, true),
+    "Ada Lovelace - A Reliable Paper Title.pdf"
   );
 });
 
@@ -95,6 +103,13 @@ test("a generic PDF without academic signals uses only its title", async () => {
   );
   assert.deepEqual(metadata, { title: "Annual Report", author: "", year: "" });
   assert.equal(globalThis.CiteNameCitation.filename(metadata), "Annual Report.pdf");
+});
+
+test("an authors note identifies a journal PDF without an abstract heading", () => {
+  assert.equal(
+    globalThis.CiteNamePDF.hasAcademicSignals("Authors’ Note: Correspondence should be addressed to the first author."),
+    true
+  );
 });
 
 test("internal PostScript source paths in PDF metadata fall back to the page title", async () => {
@@ -124,6 +139,7 @@ test("internal PostScript source paths in PDF metadata fall back to the page tit
 test("layout-program working filenames are rejected as PDF titles", () => {
   assert.equal(globalThis.CiteNameCitation.isPlausibleTitle("社会心理出片.indd.pdf"), false);
   assert.equal(globalThis.CiteNameCitation.isPlausibleTitle("manuscript-final.docx"), false);
+  assert.equal(globalThis.CiteNameCitation.isPlausibleTitle("FI-01沈伯洋.tpf"), false);
 });
 
 test("a PDF without a prominent title preserves its original filename", async () => {
@@ -191,6 +207,99 @@ test("PMC HTML metadata can be parsed without a DOM", () => {
     author: "Guy Itzchakov & Netta Weinstein",
     year: "2020",
     pdfURLs: [],
+  });
+});
+
+test("Europe PMC records provide a fast fallback for direct PMC PDF links", () => {
+  assert.deepEqual(globalThis.CiteNameCitation.metadataFromEuropePMCRecord({
+    title: "Can high quality listening predict lower speakers' prejudiced attitudes?",
+    authorString: "Itzchakov G, Weinstein N, Legate N, Amar M.",
+    firstPublicationDate: "2020-08-06",
+  }), {
+    title: "Can high quality listening predict lower speakers' prejudiced attitudes?",
+    author: "G Itzchakov et al.",
+    year: "2020",
+    pdfURLs: [],
+  });
+});
+
+test("Airiti search results provide metadata for their own download buttons", () => {
+  const values = {
+    ".ustyle_heading_H3 a": { textContent: "中國認知領域作戰模型初探：以2020臺灣選舉為例" },
+    ".sourcedate": { textContent: "(2021 / 01)" },
+  };
+  const result = {
+    querySelector(selector) {
+      return values[selector] || null;
+    },
+    querySelectorAll(selector) {
+      assert.equal(selector, ".點擊作者");
+      return [{ textContent: "沈伯洋(Puma Shen)" }];
+    },
+  };
+
+  assert.deepEqual(globalThis.CiteNameCitation.metadataFromAiritiSearchResult(result), {
+    title: "中國認知領域作戰模型初探：以2020臺灣選舉為例",
+    author: "沈伯洋",
+    year: "2021",
+    pdfURLs: [],
+  });
+});
+
+test("Airiti search results support author and date fields without legacy wrappers", () => {
+  const values = {
+    ".ustyle_heading_H3 a": { textContent: "可教化量刑與矯治之探討" },
+    ".source": { textContent: "《玄奘法律學報》 37期 (2022 / 06) Pp. 101-134" },
+  };
+  const result = {
+    querySelector(selector) {
+      return values[selector] || null;
+    },
+    querySelectorAll(selector) {
+      assert.equal(selector, ".點擊作者");
+      return [{ textContent: "李錫棟(Lii, Shyi-Dong)" }];
+    },
+  };
+
+  assert.deepEqual(globalThis.CiteNameCitation.metadataFromAiritiSearchResult(result), {
+    title: "可教化量刑與矯治之探討",
+    author: "李錫棟",
+    year: "2022",
+    pdfURLs: [],
+  });
+});
+
+test("PMC XML accepts author groups without per-author contrib-type attributes", () => {
+  assert.deepEqual(globalThis.CiteNameCitation.metadataFromPMCXML(`
+    <article-title>Can high quality listening predict lower speakers' prejudiced attitudes?</article-title>
+    <contrib-group content-type="author">
+      <contrib><name><surname>Itzchakov</surname><given-names>Guy</given-names></name></contrib>
+      <contrib><name><surname>Weinstein</surname><given-names>Netta</given-names></name></contrib>
+      <contrib><name><surname>Legate</surname><given-names>Nicole</given-names></name></contrib>
+    </contrib-group>
+    <pub-date><year>2020</year></pub-date>
+  `), {
+    title: "Can high quality listening predict lower speakers' prejudiced attitudes?",
+    author: "Guy Itzchakov et al.",
+    year: "2020",
+    pdfURLs: [],
+  });
+});
+
+test("Airiti citation metadata retains its DOI", () => {
+  const metadata = globalThis.CiteNameCitation.metadataFromHTML(`
+    <meta name="citation_title" content="資優班生的系統性壓力：落後者觀點">
+    <meta name="citation_author" content="吳玟秀">
+    <meta name="citation_author" content="曾正宜">
+    <meta name="citation_date" content="2023/09/30">
+    <meta name="citation_doi" content="10.53106/102887082023096903003">
+  `);
+  assert.deepEqual(metadata, {
+    title: "資優班生的系統性壓力：落後者觀點",
+    author: "吳玟秀 & 曾正宜",
+    year: "2023",
+    pdfURLs: [],
+    doi: "10.53106/102887082023096903003",
   });
 });
 

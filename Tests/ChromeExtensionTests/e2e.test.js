@@ -470,6 +470,424 @@ test("a DOI from the article page takes priority over a Springer book title", as
   assert.equal(harness.analysisCalls.length, 0);
 });
 
+test("Airiti article metadata names a JavaScript-initiated PDF download", async () => {
+  const pageURL = "https://www.airitilibrary.com/Article/Detail/P20170603003-N202311030006-00003";
+  const harness = createBackgroundHarness({
+    async fetchHandler(url) {
+      assert.match(url, /10.53106%2F102887082023096903003/u);
+      return {
+        ok: true,
+        async json() {
+          return { message: {
+            title: ["資優班生的系統性壓力：落後者觀點"],
+            author: [
+              { given: "玟秀", family: "吳" },
+              { given: "正宜", family: "曾" },
+            ],
+            published: { "date-parts": [[2023]] },
+          } };
+        },
+      };
+    },
+  });
+  await harness.onMessage.emit({
+    type: "citation-page-metadata",
+    metadata: {
+      title: "資優班生的系統性壓力：落後者觀點",
+      author: "吳玟秀 & 曾正宜",
+      year: "2023",
+      doi: "10.53106/102887082023096903003",
+      pageURL,
+      pdfURLs: [],
+      savedAt: Date.now(),
+    },
+  }, { url: pageURL, tab: { id: 99 } });
+  await harness.onMessage.emit({
+    type: "airiti-download-intent",
+    metadata: {
+      title: "資優班生的系統性壓力：落後者觀點",
+      author: "吳玟秀 & 曾正宜",
+      year: "2023",
+      doi: "10.53106/102887082023096903003",
+      pageURL,
+      savedAt: Date.now(),
+    },
+  }, { url: pageURL, tab: { id: 99 } });
+
+  const suggestion = await harness.determine({
+    id: 99,
+    filename: "download.pdf",
+    finalUrl: "https://www.airitilibrary.com/Article/DownloadPDF",
+    mime: "application/pdf",
+  });
+  assert.deepEqual({ ...suggestion }, {
+    filename: "吳玟秀 & 曾正宜 (2023) - 資優班生的系統性壓力：落後者觀點.pdf",
+    conflictAction: "uniquify",
+  });
+  assert.equal(harness.analysisCalls.length, 0);
+});
+
+test("Airiti query pages capture metadata from the clicked search result", () => {
+  const messages = [];
+  const clickListeners = [];
+  const searchResult = {
+    querySelector(selector) {
+      const values = {
+        ".ustyle_heading_H3 a": { textContent: "中國認知領域作戰模型初探：以2020臺灣選舉為例" },
+        ".sourcedate": { textContent: "(2021 / 01)" },
+      };
+      return values[selector] || null;
+    },
+    querySelectorAll(selector) {
+      assert.equal(selector, ".點擊作者");
+      return [{ textContent: "沈伯洋(Puma Shen)" }];
+    },
+  };
+  const downloadPoint = {
+    closest(selector) {
+      return selector === ".searchResultGroup" ? searchResult : null;
+    },
+  };
+  const document = {
+    querySelectorAll(selector) {
+      if (selector === ".searchResultGroup") return [searchResult];
+      assert.equal(selector, "meta[name], meta[property]");
+      return [];
+    },
+    addEventListener(type, listener, capture) {
+      assert.equal(type, "click");
+      assert.equal(capture, true);
+      clickListeners.push(listener);
+    },
+  };
+  const context = vm.createContext({
+    URL,
+    Date,
+    console,
+    location: { href: "https://www-airitilibrary-com.nthulib-oc.nthu.edu.tw/Article/Query?queryString=author" },
+    document,
+    chrome: { runtime: { sendMessage(message) { messages.push(message); } } },
+  });
+  loadScript(context, "citation.js");
+  context.CiteNameCitation.metadataFromDocument = () => ({
+    title: "搜尋結果頁共用標題",
+    author: "",
+    year: "2026",
+    pdfURLs: [],
+  });
+  loadScript(context, "citation-content.js");
+
+  assert.equal(clickListeners.length, 1);
+  clickListeners[0]({
+    target: {
+      closest(selector) {
+        return selector === ".downloadPoint, .tool_downloadPoint" ? downloadPoint : null;
+      },
+    },
+  });
+  // Airiti opens a confirmation dialog after the result-level click. Its
+  // Yes button is another .downloadPoint outside the selected result and
+  // must not replace that result's metadata with page-level metadata.
+  clickListeners[0]({
+    target: {
+      closest(selector) {
+        return selector === ".downloadPoint, .tool_downloadPoint"
+          ? { closest() { return null; } }
+          : null;
+      },
+    },
+  });
+  const intent = messages.find((message) => message.type === "airiti-download-intent");
+  assert.equal(messages.filter((message) => message.type === "airiti-search-results-metadata").length, 1);
+  assert.deepEqual(JSON.parse(JSON.stringify(intent)), {
+    type: "airiti-download-intent",
+    metadata: {
+      title: "中國認知領域作戰模型初探：以2020臺灣選舉為例",
+      author: "沈伯洋",
+      year: "2021",
+      pdfURLs: [],
+      pageURL: "https://www-airitilibrary-com.nthulib-oc.nthu.edu.tw/Article/Query?queryString=author",
+      doi: "",
+      savedAt: intent.metadata.savedAt,
+    },
+  });
+});
+
+test("Airiti query pages capture clicks on the outer download wrapper", () => {
+  const messages = [];
+  let clickListener;
+  const searchResult = {
+    querySelector(selector) {
+      return {
+        ".ustyle_heading_H3 a": { textContent: "中國的境外制裁與長臂管轄：意義、效力與法理建構" },
+        ".sourcedate": { textContent: "(2025 / 12)" },
+      }[selector] || null;
+    },
+    querySelectorAll(selector) {
+      assert.equal(selector, ".點擊作者");
+      return [{ textContent: "游智偉(Yu, Chih-Wei)" }];
+    },
+  };
+  const outerDownloadWrapper = {
+    closest(selector) {
+      return selector === ".searchResultGroup" ? searchResult : null;
+    },
+  };
+  const document = {
+    querySelectorAll(selector) {
+      return selector === ".searchResultGroup" ? [searchResult] : [];
+    },
+    addEventListener(_type, listener) { clickListener = listener; },
+  };
+  const context = vm.createContext({
+    URL,
+    Date,
+    console,
+    location: { href: "https://www-airitilibrary-com.nthulib-oc.nthu.edu.tw/Article/Query?queryString=author" },
+    document,
+    chrome: { runtime: { sendMessage(message) { messages.push(message); } } },
+  });
+  loadScript(context, "citation.js");
+  loadScript(context, "citation-content.js");
+
+  clickListener({
+    target: {
+      closest(selector) {
+        return selector === ".downloadPoint, .tool_downloadPoint"
+          ? outerDownloadWrapper
+          : null;
+      },
+    },
+  });
+
+  const intent = messages.find((message) => message.type === "airiti-download-intent");
+  assert.equal(intent.metadata.title, "中國的境外制裁與長臂管轄：意義、效力與法理建構");
+  assert.equal(intent.metadata.author, "游智偉");
+  assert.equal(intent.metadata.year, "2025");
+});
+
+test("Airiti query snapshots match the original downloaded title when click intent is unavailable", async () => {
+  const pageURL = "https://www-airitilibrary-com.nthulib-oc.nthu.edu.tw/Article/Query?queryString=author";
+  const harness = createBackgroundHarness();
+  await harness.onMessage.emit({
+    type: "airiti-search-results-metadata",
+    pageURL,
+    savedAt: Date.now(),
+    results: [{
+      title: "可教化量刑與矯治之探討",
+      author: "李錫棟",
+      year: "2022",
+      pdfURLs: [],
+    }],
+  }, { url: pageURL, tab: { id: 101 } });
+
+  const suggestion = await harness.determine({
+    id: 107,
+    filename: "可教化量刑與矯治之探討.pdf",
+    finalUrl: "blob:https://www-airitilibrary-com.nthulib-oc.nthu.edu.tw/31b5fa52-8158-4cbb-90ba-287d82640a55",
+    mime: "application/pdf",
+    tabId: -1,
+  });
+  assert.deepEqual({ ...suggestion }, {
+    filename: "李錫棟 (2022) - 可教化量刑與矯治之探討.pdf",
+    conflictAction: "uniquify",
+  });
+  assert.equal(harness.analysisCalls.length, 0);
+});
+
+test("Airiti library proxy downloads use the article metadata", async () => {
+  const pageURL = "https://www-airitilibrary-com.nthulib-oc.nthu.edu.tw/Article/Detail/P20200101001-202609180001-00001";
+  const harness = createBackgroundHarness();
+  await harness.onMessage.emit({
+    type: "airiti-download-intent",
+    metadata: {
+      title: "中國認知領域作戰模型初探：以2020臺灣選舉為例",
+      author: "沈伯洋",
+      year: "2026",
+      pageURL,
+      pdfURLs: [],
+      savedAt: Date.now(),
+    },
+  }, { url: pageURL, tab: { id: 100 } });
+
+  const suggestion = await harness.determine({
+    id: 101,
+    filename: "download.pdf",
+    // The proxy sends the actual file through a separate download host.
+    finalUrl: "https://download.nthulib-oc.nthu.edu.tw/files/article.pdf",
+    mime: "application/pdf",
+    tabId: 100,
+  });
+  assert.deepEqual({ ...suggestion }, {
+    filename: "沈伯洋 (2026) - 中國認知領域作戰模型初探：以2020臺灣選舉為例.pdf",
+    conflictAction: "uniquify",
+  });
+  assert.equal(harness.analysisCalls.length, 0);
+});
+
+test("Airiti blob downloads retain article metadata after session state is lost", async () => {
+  const pageURL = "https://www-airitilibrary-com.nthulib-oc.nthu.edu.tw/Article/Detail?DocID=a0000015-N202605260011-00001";
+  const harness = createBackgroundHarness();
+  await harness.onMessage.emit({
+    type: "citation-page-metadata",
+    metadata: {
+      title: "我們需要的臺北市長人選剖析",
+      author: "",
+      year: "2026",
+      pageURL,
+      pdfURLs: [],
+      savedAt: Date.now(),
+    },
+  }, { url: pageURL, tab: { id: 100 } });
+
+  delete harness.session.data.airitiActiveMetadata;
+  delete harness.session.data["citationMetadata-100"];
+
+  const suggestion = await harness.determine({
+    id: 105,
+    filename: "我們需要的臺北市長人選剖析.pdf",
+    finalUrl: "blob:https://www-airitilibrary-com.nthulib-oc.nthu.edu.tw/7ad1b3a0-bd67-4381-8575-f5689a5e0b79",
+    mime: "application/pdf",
+  });
+  assert.deepEqual({ ...suggestion }, {
+    filename: "(2026) - 我們需要的臺北市長人選剖析.pdf",
+    conflictAction: "uniquify",
+  });
+  assert.equal(harness.analysisCalls.length, 0);
+});
+
+test("Airiti query-page download intent names the proxy PDF", async () => {
+  const pageURL = "https://www-airitilibrary-com.nthulib-oc.nthu.edu.tw/Article/Query?queryString=author";
+  const harness = createBackgroundHarness();
+  const staleMetadata = {
+    title: "上一個詳目頁標題",
+    author: "上一位作者",
+    year: "2025",
+    pageURL: "https://www-airitilibrary-com.nthulib-oc.nthu.edu.tw/Article/Detail?DocID=old",
+    savedAt: Date.now(),
+  };
+  harness.session.data.airitiActiveMetadata = staleMetadata;
+  harness.local.data.airitiActiveMetadata = staleMetadata;
+  await harness.onMessage.emit({
+    type: "airiti-download-intent",
+    metadata: {
+      title: "中國認知領域作戰模型初探：以2020臺灣選舉為例",
+      author: "沈伯洋",
+      year: "2021",
+      pageURL,
+      pdfURLs: [],
+      savedAt: Date.now(),
+    },
+  }, { url: pageURL, tab: { id: 100 } });
+  assert.equal(harness.session.data.airitiActiveMetadata, undefined);
+  assert.equal(harness.local.data.airitiActiveMetadata, undefined);
+
+  const suggestion = await harness.determine({
+    id: 102,
+    filename: "FI-01沈伯洋.tpf.pdf",
+    finalUrl: "https://download.nthulib-oc.nthu.edu.tw/files/article.pdf",
+    mime: "application/pdf",
+    tabId: 100,
+  });
+  assert.deepEqual({ ...suggestion }, {
+    filename: "沈伯洋 (2021) - 中國認知領域作戰模型初探：以2020臺灣選舉為例.pdf",
+    conflictAction: "uniquify",
+  });
+  assert.equal(harness.analysisCalls.length, 0);
+});
+
+test("Airiti query-page intent survives repeated detached proxy downloads", async () => {
+  const pageURL = "https://www-airitilibrary-com.nthulib-oc.nthu.edu.tw/Article/Query?queryString=author";
+  const harness = createBackgroundHarness();
+  await harness.onMessage.emit({
+    type: "airiti-download-intent",
+    metadata: {
+      title: "中國認知領域作戰模型初探：以2020臺灣選舉為例",
+      author: "沈伯洋",
+      year: "2021",
+      pageURL,
+      savedAt: Date.now(),
+    },
+  }, { url: pageURL, tab: { id: 100 } });
+
+  const suggestion = await harness.determine({
+    id: 103,
+    filename: "FI-01沈伯洋.tpf.pdf",
+    finalUrl: "https://download.nthulib-oc.nthu.edu.tw/files/article.pdf",
+    mime: "application/pdf",
+    tabId: -1,
+  });
+  assert.deepEqual({ ...suggestion }, {
+    filename: "沈伯洋 (2021) - 中國認知領域作戰模型初探：以2020臺灣選舉為例.pdf",
+    conflictAction: "uniquify",
+  });
+  const repeatedSuggestion = await harness.determine({
+    id: 106,
+    filename: "FI-01沈伯洋.tpf.pdf",
+    finalUrl: "https://download.nthulib-oc.nthu.edu.tw/files/article.pdf",
+    mime: "application/pdf",
+    tabId: -1,
+  });
+  assert.deepEqual({ ...repeatedSuggestion }, {
+    filename: "沈伯洋 (2021) - 中國認知領域作戰模型初探：以2020臺灣選舉為例.pdf",
+    conflictAction: "uniquify",
+  });
+  assert.equal(harness.session.data.airitiPendingMetadata.title, "中國認知領域作戰模型初探：以2020臺灣選舉為例");
+  assert.equal(harness.analysisCalls.length, 0);
+});
+
+test("Airiti query-page intent names a detached blob download", async () => {
+  const pageURL = "https://www-airitilibrary-com.nthulib-oc.nthu.edu.tw/Article/Query?queryString=author";
+  const harness = createBackgroundHarness();
+  await harness.onMessage.emit({
+    type: "airiti-download-intent",
+    metadata: {
+      title: "中國認知領域作戰模型初探：以2020臺灣選舉為例",
+      author: "沈伯洋",
+      year: "2021",
+      pageURL,
+      savedAt: Date.now(),
+    },
+  }, { url: pageURL, tab: { id: 100 } });
+
+  const suggestion = await harness.determine({
+    id: 104,
+    filename: "中國認知領域作戰模型初探：以2020臺灣選舉為例.pdf",
+    finalUrl: "blob:https://www-airitilibrary-com.nthulib-oc.nthu.edu.tw/26bd6f30-80b6-4a01-b37a-4adfeafc8932",
+    mime: "application/pdf",
+    tabId: -1,
+  });
+  assert.deepEqual({ ...suggestion }, {
+    filename: "沈伯洋 (2021) - 中國認知領域作戰模型初探：以2020臺灣選舉為例.pdf",
+    conflictAction: "uniquify",
+  });
+  assert.equal(harness.session.data.airitiPendingMetadata.title, "中國認知領域作戰模型初探：以2020臺灣選舉為例");
+  assert.equal(harness.analysisCalls.length, 0);
+});
+
+test("Airiti download intent does not rename a PDF from another site", async () => {
+  const harness = createBackgroundHarness();
+  await harness.onMessage.emit({
+    type: "airiti-download-intent",
+    metadata: {
+      title: "資優班生的系統性壓力：落後者觀點",
+      author: "吳玟秀 & 曾正宜",
+      year: "2023",
+      pageURL: "https://www.airitilibrary.com/Article/Detail/P20170603003-N202311030006-00003",
+      savedAt: Date.now(),
+    },
+  }, { tab: { id: 99 } });
+
+  const suggestion = await harness.determine({
+    id: 100,
+    filename: "mit-paper.pdf",
+    finalUrl: "https://dspace.mit.edu/bitstreams/example/download",
+    mime: "application/pdf",
+  });
+  assert.equal(suggestion, undefined);
+  assert.equal(harness.analysisCalls.length, 1);
+});
+
 test("a failed in-extension analysis preserves the original filename", async () => {
   const harness = createBackgroundHarness({
     analysisHandler: () => ({ ok: false, error: "網站拒絕讀取 PDF" }),
